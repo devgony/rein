@@ -64,6 +64,7 @@ impl SyncLock {
         fs::create_dir_all(&store.root)?;
         let file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(store.root.join("sync.lock"))?;
