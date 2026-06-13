@@ -391,21 +391,12 @@ fn mutations_check_uncheck_log_fail() {
     let root = store_root(&env);
     let path = root.join("active/demo.md");
 
-    // items get IDs lazily at sync touchpoints; --task works with raw slugs too,
-    // so first give them IDs via a push-like touchpoint: use issue? Phase 1 is
-    // offline — assign by checking with explicit text-derived id after issue cmd.
-    // Here we exercise check on a manually-ID'd item instead:
-    let content = read(&path).replace(
-        "- [ ] Do thing one",
-        "- [ ] <!-- task:one --> Do thing one",
-    );
-    fs::write(&path, content).unwrap();
+    // mutation assigns stable integer IDs on the spot — no GitHub needed
+    rein(&env, &env.repo).args(["check", "1"]).assert().success();
+    assert!(read(&path).contains("- [x] <!-- task:1 --> Do thing one"));
 
-    rein(&env, &env.repo).args(["check", "one"]).assert().success();
-    assert!(read(&path).contains("- [x] <!-- task:one --> Do thing one"));
-
-    rein(&env, &env.repo).args(["uncheck", "one"]).assert().success();
-    assert!(read(&path).contains("- [ ] <!-- task:one --> Do thing one"));
+    rein(&env, &env.repo).args(["uncheck", "1"]).assert().success();
+    assert!(read(&path).contains("- [ ] <!-- task:1 --> Do thing one"));
 
     rein(&env, &env.repo)
         .args(["log", "implemented the thing"])
@@ -417,20 +408,113 @@ fn mutations_check_uncheck_log_fail() {
     assert!(doc.find("implemented the thing").unwrap() > log_pos);
 
     rein(&env, &env.repo)
-        .args(["fail", "one", "--reason", "blocked by upstream"])
+        .args(["fail", "1", "--reason", "blocked by upstream"])
         .assert()
         .success();
     let doc = read(&path);
-    assert!(doc.contains("FAIL one: blocked by upstream"));
+    assert!(doc.contains("FAIL 1: blocked by upstream"));
     // failed item stays unchecked
-    assert!(doc.contains("- [ ] <!-- task:one --> Do thing one"));
+    assert!(doc.contains("- [ ] <!-- task:1 --> Do thing one"));
 
-    // unknown item errors
+    // unknown item errors and lists what's available
     rein(&env, &env.repo)
-        .args(["check", "nope"])
+        .args(["check", "99"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("not found"));
+        .stderr(predicate::str::contains("available items").and(predicate::str::contains("1, 2, 3")));
+}
+
+#[test]
+fn local_check_assigns_integer_ids_without_github() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    seed_items(&env, "demo"); // 3 items, no IDs, fully offline
+    rein(&env, &env.repo).args(["start", "demo"]).assert().success();
+
+    // single integer sequence across Tasks(1,2) and Validation(3)
+    rein(&env, &env.repo).args(["check", "2"]).assert().success();
+    let doc = read(&store_root(&env).join("active/demo.md"));
+    assert!(doc.contains("- [ ] <!-- task:1 --> Do thing one"));
+    assert!(doc.contains("- [x] <!-- task:2 --> Add tests later"));
+    assert!(doc.contains("- [ ] <!-- task:3 --> Tests pass"));
+}
+
+#[test]
+fn ids_are_stable_under_reorder() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    seed_items(&env, "demo");
+    rein(&env, &env.repo).args(["start", "demo"]).assert().success();
+    rein(&env, &env.repo).args(["check", "1"]).assert().success(); // assigns 1,2,3
+    let path = store_root(&env).join("active/demo.md");
+
+    // a human reorders items (task:2 above task:1) and inserts a new one,
+    // simulating an edit in $EDITOR / Obsidian
+    let doc = read(&path);
+    let reordered = doc.replace(
+        "- [x] <!-- task:1 --> Do thing one\n- [ ] <!-- task:2 --> Add tests later",
+        "- [ ] new top item\n- [ ] <!-- task:2 --> Add tests later\n- [x] <!-- task:1 --> Do thing one",
+    );
+    assert_ne!(reordered, doc, "reorder replacement must apply");
+    fs::write(&path, reordered).unwrap();
+
+    // checking 2 still hits "Add tests later" despite the move — id is identity, not position
+    rein(&env, &env.repo).args(["check", "2"]).assert().success();
+    let doc = read(&path);
+    assert!(doc.contains("- [x] <!-- task:2 --> Add tests later"));
+    // the inserted item gets the next integer (4), never a reused one
+    assert!(doc.contains("<!-- task:4 --> new top item"));
+}
+
+#[test]
+fn check_with_task_arg_gives_helpful_error() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    seed_items(&env, "demo");
+    rein(&env, &env.repo).args(["start", "demo"]).assert().success();
+    let id = task_id(&env, "active", "demo");
+
+    // the exact mistake from the bug report: passing a task id to `check`
+    rein(&env, &env.repo)
+        .args(["check", &id])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("is a task, not an item"));
+}
+
+#[test]
+fn open_assigns_ids_after_editor() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    seed_items(&env, "demo"); // items lack IDs
+    // EDITOR=true is a no-op edit; open must still heal IDs on return
+    rein(&env, &env.repo).args(["open", "demo"]).assert().success();
+    let doc = read(&store_root(&env).join("inbox/demo.md"));
+    assert!(doc.contains("<!-- task:1 -->"));
+    assert!(doc.contains("<!-- task:2 -->"));
+    assert!(doc.contains("<!-- task:3 -->"));
+}
+
+#[test]
+fn status_lists_items_with_numbers() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    seed_items(&env, "demo");
+    rein(&env, &env.repo).args(["start", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("items (demo):")
+                .and(predicate::str::contains("Do thing one"))
+                .and(predicate::str::contains("Tests pass")),
+        );
 }
 
 #[test]
@@ -679,11 +763,11 @@ fn issue_publishes_projection_and_assigns_ids() {
         .success()
         .stdout(predicate::str::contains("issue #41"));
 
-    // IDs assigned at the issue touchpoint, including v- prefix for Validation
+    // stable integer IDs assigned at the issue touchpoint (single sequence)
     let doc = read(&store_root(&env).join("inbox/demo.md"));
-    assert!(doc.contains("<!-- task:do-thing-one -->"));
-    assert!(doc.contains("<!-- task:add-tests-later -->"));
-    assert!(doc.contains("<!-- task:v-tests-pass -->"));
+    assert!(doc.contains("- [ ] <!-- task:1 --> Do thing one"));
+    assert!(doc.contains("- [ ] <!-- task:2 --> Add tests later"));
+    assert!(doc.contains("- [ ] <!-- task:3 --> Tests pass"));
     assert!(doc.contains("github_issue: 41"));
 
     // published body: markers, content, no frontmatter, no Agent Log
@@ -731,7 +815,7 @@ fn push_local_change_preserves_human_text() {
 
     // local change
     rein(&env, &env.repo)
-        .args(["check", "do-thing-one"])
+        .args(["check", "1"])
         .assert()
         .success();
 
@@ -745,7 +829,7 @@ fn push_local_change_preserves_human_text() {
     let edited = read(&gh.edit_body);
     assert!(edited.contains("human intro"));
     assert!(edited.contains("human outro"));
-    assert!(edited.contains("- [x] <!-- task:do-thing-one -->"));
+    assert!(edited.contains("- [x] <!-- task:1 --> Do thing one"));
 
     // second push: up to date
     gh.set_issue_view_body(&edited);
@@ -815,7 +899,7 @@ fn conflict_detected_then_resolved() {
     let published = read(&gh.create_body);
     gh.set_issue_view_body(&published.replace("Do thing one", "Do thing one REMOTE"));
     rein(&env, &env.repo)
-        .args(["check", "do-thing-one"])
+        .args(["check", "1"])
         .assert()
         .success();
 

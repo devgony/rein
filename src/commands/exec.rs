@@ -6,7 +6,7 @@ use crate::store::{Status, TaskRef};
 use crate::task;
 use crate::util;
 use crate::Ctx;
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use std::path::PathBuf;
 
 /// inbox→active claim + optional worktree/branch/draft-PR.
@@ -119,13 +119,38 @@ fn set_branch_frontmatter(ctx: &Ctx, task: &TaskRef, branch: &str) -> Result<()>
 fn resolve_for_mutation(ctx: &Ctx, flag: Option<&str>) -> Result<TaskRef> {
     let (task, source) = resolve::resolve_task(ctx, flag)?;
     resolve::gate_mutation(ctx, source)?;
-    Ok(task)
+    // local touchpoint: assign item IDs so checking works without GitHub sync
+    crate::commands::assign_ids(ctx, &task)
+}
+
+/// Turn a bare "item not found" into actionable guidance.
+fn item_error_hint(ctx: &Ctx, task: &TaskRef, item_id: &str, base: anyhow::Error) -> anyhow::Error {
+    if ctx.store.find(item_id).is_ok() {
+        return anyhow!(
+            "'{}' is a task, not an item — pass an item number (see `rein status`), \
+             e.g. `rein check 1 --task {}`",
+            item_id,
+            item_id
+        );
+    }
+    let avail: Vec<String> = task::scan_items(&task.doc.body)
+        .iter()
+        .filter_map(|i| i.id.clone())
+        .collect();
+    if avail.is_empty() {
+        anyhow!("{} — '{}' has no checklist items", base, task.slug)
+    } else {
+        anyhow!("{}. available items in {}: {}", base, task.slug, avail.join(", "))
+    }
 }
 
 pub fn check(ctx: &Ctx, item_id: &str, flag: Option<&str>, checked: bool) -> Result<()> {
     let task = resolve_for_mutation(ctx, flag)?;
     let mut doc = task.doc.clone();
-    doc.body = task::set_checked(&doc.body, item_id, checked)?;
+    doc.body = match task::set_checked(&doc.body, item_id, checked) {
+        Ok(body) => body,
+        Err(e) => return Err(item_error_hint(ctx, &task, item_id, e)),
+    };
     doc.touch();
     ctx.store.write_doc(&task.path, &doc)?;
     println!(
@@ -154,7 +179,7 @@ pub fn fail(ctx: &Ctx, item_id: &str, reason: &str, flag: Option<&str>) -> Resul
         .iter()
         .any(|i| i.id.as_deref() == Some(item_id))
     {
-        bail!("item '{}' not found", item_id);
+        return Err(item_error_hint(ctx, &task, item_id, anyhow!("item '{}' not found", item_id)));
     }
     let mut doc = task.doc.clone();
     doc.body = task::append_log(

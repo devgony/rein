@@ -1,5 +1,4 @@
 use anyhow::{bail, Context, Result};
-use std::collections::HashSet;
 
 pub const AGENT_LOG_HEADING: &str = "## Agent Log";
 
@@ -131,20 +130,12 @@ impl TaskDoc {
 // Checklist items
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum ItemSection {
-    Tasks,
-    Validation,
-    Other,
-}
-
 #[derive(Debug, Clone)]
 pub struct Item {
     pub id: Option<String>,
     pub checked: bool,
     pub text: String,
     pub line: usize,
-    pub section: ItemSection,
 }
 
 fn checkbox_prefix(line: &str) -> Option<(bool, usize)> {
@@ -167,16 +158,7 @@ fn extract_item_id(rest: &str) -> Option<String> {
 
 pub fn scan_items(body: &str) -> Vec<Item> {
     let mut items = Vec::new();
-    let mut section = ItemSection::Other;
     for (i, line) in body.lines().enumerate() {
-        if line.starts_with("## ") {
-            section = match line.trim() {
-                "## Tasks" => ItemSection::Tasks,
-                "## Validation" => ItemSection::Validation,
-                _ => ItemSection::Other,
-            };
-            continue;
-        }
         if let Some((checked, after)) = checkbox_prefix(line) {
             let rest = &line[after..];
             let id = extract_item_id(rest);
@@ -189,36 +171,29 @@ pub fn scan_items(body: &str) -> Vec<Item> {
                 checked,
                 text,
                 line: i,
-                section: section.clone(),
             });
         }
     }
     items
 }
 
-/// Assign stable IDs to checklist items that lack one. Returns the new body
-/// and whether anything changed. Validation items get a `v-` prefix.
+/// Assign stable, monotonic integer IDs to checklist items lacking one. A
+/// single sequence spans Tasks and Validation. Existing IDs (any form) are kept
+/// and never renumbered, so reordering, rewording, or inserting lines never
+/// moves an item's ID — it is a serial number, not a line number. New items get
+/// `max(existing integer ids) + 1`. Returns the new body and whether it changed.
 pub fn ensure_item_ids(body: &str) -> (String, bool) {
     let items = scan_items(body);
-    let mut used: HashSet<String> = items.iter().filter_map(|i| i.id.clone()).collect();
+    let mut max_n: u32 = items
+        .iter()
+        .filter_map(|i| i.id.as_deref())
+        .filter_map(|s| s.parse::<u32>().ok())
+        .max()
+        .unwrap_or(0);
     let mut assignments: Vec<(usize, String)> = Vec::new();
     for item in items.iter().filter(|i| i.id.is_none()) {
-        let words: Vec<&str> = item.text.split_whitespace().take(3).collect();
-        let mut base = crate::util::slugify(&words.join(" "));
-        if base.is_empty() {
-            base = "item".to_string();
-        }
-        if item.section == ItemSection::Validation && !base.starts_with("v-") {
-            base = format!("v-{}", base);
-        }
-        let mut candidate = base.clone();
-        let mut n = 1;
-        while used.contains(&candidate) {
-            n += 1;
-            candidate = format!("{}-{}", base, n);
-        }
-        used.insert(candidate.clone());
-        assignments.push((item.line, candidate));
+        max_n += 1;
+        assignments.push((item.line, max_n.to_string()));
     }
     if assignments.is_empty() {
         return (body.to_string(), false);
@@ -227,9 +202,13 @@ pub fn ensure_item_ids(body: &str) -> (String, bool) {
     for (line_no, id) in assignments {
         let line = &lines[line_no];
         if let Some((_, after)) = checkbox_prefix(line) {
-            let (head, rest) = line.split_at(after);
-            lines[line_no] = format!("{} <!-- task:{} -->{}{}", head, id, if rest.trim().is_empty() { "" } else { " " }, rest.trim_start());
-            // normalize: head already includes "- [ ]"
+            let head = &line[..after];
+            let rest = line[after..].trim_start();
+            lines[line_no] = if rest.is_empty() {
+                format!("{} <!-- task:{} -->", head, id)
+            } else {
+                format!("{} <!-- task:{} --> {}", head, id, rest)
+            };
         }
     }
     (lines.join("\n") + "\n", true)
@@ -436,7 +415,8 @@ mod tests {
         let doc = sample();
         let (body, changed) = ensure_item_ids(&doc.body);
         assert!(changed);
-        assert!(body.contains("<!-- task:second-thing -->"));
+        // "one" is non-numeric so the next item gets the first integer
+        assert!(body.contains("- [ ] <!-- task:1 --> Second thing"));
     }
 
     #[test]

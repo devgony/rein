@@ -103,7 +103,12 @@ pub fn open(ctx: &Ctx, task: Option<&str>) -> Result<()> {
             }
         }
     };
-    edit_file(&path)
+    edit_file(&path)?;
+    // assign stable IDs to whatever items the user just wrote in $EDITOR
+    if let Some(t) = ctx.store.list_tasks().into_iter().find(|t| t.path == path) {
+        crate::commands::assign_ids(ctx, &t)?;
+    }
+    Ok(())
 }
 
 pub fn edit_file(path: &Path) -> Result<()> {
@@ -149,8 +154,9 @@ pub fn root(ctx: &Ctx) -> Result<()> {
 
 pub fn status(ctx: &Ctx) -> Result<()> {
     println!("store: {}", ctx.store.root.display());
-    match resolve::resolve_task(ctx, None) {
-        Ok((task, source)) => {
+    let resolved = resolve::resolve_task(ctx, None).ok();
+    match &resolved {
+        Some((task, source)) => {
             let how = match source {
                 Source::Flag => "--task",
                 Source::WorktreePointer => "worktree",
@@ -159,7 +165,7 @@ pub fn status(ctx: &Ctx) -> Result<()> {
             };
             println!("task: {} ({}, via {})", task.id, task.status.as_str(), how);
         }
-        Err(_) => println!("task: none"),
+        None => println!("task: none"),
     }
     let tasks = ctx.store.list_tasks();
     for s in [Status::Inbox, Status::Active, Status::Done, Status::Canceled] {
@@ -174,6 +180,23 @@ pub fn status(ctx: &Ctx) -> Result<()> {
             st.branch.as_deref().unwrap_or("-"),
             st.worktree.as_deref().unwrap_or("-")
         );
+    }
+    // checklist of the resolved task, with the integer ids `rein check` accepts.
+    // Numbers are computed deterministically (same as assignment) without writing.
+    if let Some((task, _)) = &resolved {
+        let (assigned, _) = crate::task::ensure_item_ids(&task.doc.body);
+        let items = crate::task::scan_items(&assigned);
+        if !items.is_empty() {
+            println!("items ({}):", task.slug);
+            for it in items {
+                println!(
+                    "  [{}] {:<3} {}",
+                    if it.checked { "x" } else { " " },
+                    it.id.as_deref().unwrap_or("-"),
+                    it.text
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -193,6 +216,9 @@ pub fn doctor(ctx: &Ctx) -> Result<()> {
             ctx.store.write_doc(&t.path, &doc)?;
             println!("fixed status: {} -> {}", t.slug, t.status.as_str());
         }
+        // assign any missing item IDs (heals docs edited outside sync)
+        let fresh = ctx.store.find_by_id(&t.id).unwrap_or_else(|| t.clone());
+        crate::commands::assign_ids(ctx, &fresh)?;
         let rel = t
             .path
             .strip_prefix(&ctx.store.root)

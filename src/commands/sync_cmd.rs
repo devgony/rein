@@ -8,20 +8,9 @@ use crate::util;
 use crate::Ctx;
 use anyhow::{bail, Context, Result};
 
-/// Assign item IDs (the new/issue/push/pull touchpoints) and persist if changed.
+/// Assign item IDs at the issue/push/pull touchpoints (shared local helper).
 fn ensure_ids_saved(ctx: &Ctx, task: &TaskRef) -> Result<TaskRef> {
-    let (body, changed) = task::ensure_item_ids(&task.doc.body);
-    if changed {
-        let mut doc = task.doc.clone();
-        doc.body = body;
-        doc.touch();
-        ctx.store.write_doc(&task.path, &doc)?;
-        return ctx
-            .store
-            .find_by_id(&task.id)
-            .context("task vanished while assigning IDs");
-    }
-    Ok(task.clone())
+    crate::commands::assign_ids(ctx, task)
 }
 
 /// `rein issue <task>` — publish a local doc as a new GitHub issue.
