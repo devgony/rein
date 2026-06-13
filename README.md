@@ -45,7 +45,8 @@ Then hand it to Claude Code; following the skill rules, the LLM proceeds:
 rein todo                     # list remaining unchecked items (skill entry point)
 rein check <item-id>          # check off a completed item
 rein log "implementation note"
-rein fail <item-id> --reason "…"   # record a blocker when stuck
+rein fail <item-id> --reason "…"   # resolve an item as failed (drops out of todo)
+rein retry <item-id>               # reopen a failed item
 ```
 
 When done:
@@ -117,7 +118,8 @@ rein move <task> <status>            move to any state (plain relocation, no sid
 rein start <task> [--worktree] [--branch <b>] [--draft-pr]
 rein check / uncheck <item-id> [--task <id>]
 rein log <text> [--task <id>]
-rein fail <item-id> --reason <text> [--task <id>]
+rein fail <item-id> --reason <text> [--task <id>]   resolve as failed (checked + struck through, drops from todo)
+rein retry <item-id> [--task <id>]   reopen a failed item
 rein issue <task> | pull-inbox | pull | push [--resolved]
 rein attach-issue <n> | attach-pr <n>
 rein done [task] [--keep-worktree]

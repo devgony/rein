@@ -11,7 +11,7 @@ Rules:
 2. Never edit checkboxes or Agent Log in the Markdown directly. Use:
    - `rein check <item-id>` after a task is implemented and verified
    - `rein log "<text>"` to append a concise entry after each completed task
-   - `rein fail <item-id> --reason "<text>"` when blocked
+   - `rein fail <item-id> --reason "<text>"` when blocked — resolves the item (it drops out of `rein todo`, so a re-run won't re-attempt it); `rein retry <item-id>` reopens it
 3. Preserve `<!-- task:... -->` ID comments when editing other sections.
 4. Run relevant tests before checking validation items.
 5. If a PR is attached, run `rein push` when finished.
