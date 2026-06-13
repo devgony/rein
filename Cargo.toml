@@ -1,10 +1,18 @@
 [package]
-name = "rein-rs"
+name = "reins"
 version = "0.1.0"
 edition = "2021"
 description = "LLM task journal + shared inbox manager"
 license = "MIT"
+repository = "https://github.com/devgony/rein"
+homepage = "https://github.com/devgony/rein"
+readme = "README.md"
+keywords = ["llm", "cli", "task", "agent", "github"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = [".claude/"]
 
+# Package is `reins` (the singular `rein` is taken); the library and the
+# installed binary are both `rein` — `cargo install reins` yields `rein`.
 [lib]
 name = "rein"
 path = "src/lib.rs"

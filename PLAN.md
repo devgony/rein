@@ -29,7 +29,7 @@
 
 - Product/brand: Rein
 - GitHub repo: rein
-- Rust crate: rein-rs (rein 이미 존재하므로)
+- Rust crate: reins (rein 이미 존재 — `-rs` 접미사 대신 복수 명사로. 설치는 `cargo install reins`, 명령은 `rein`)
 - CLI binary: rein
 
 ## 핵심 원칙

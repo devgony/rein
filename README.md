@@ -11,10 +11,16 @@ LLM task journal + shared inbox manager.
 ## Install
 
 ```sh
+cargo install reins   # the installed command is `rein`
+```
+
+Or from source:
+
+```sh
 cargo install --path .
 ```
 
-Requires git. GitHub integration (`issue`/`pull`/`push`, etc.) requires the `gh` CLI.
+The crate is published as `reins` (the singular `rein` was taken); the command you run is `rein`. Requires git. GitHub integration (`issue`/`pull`/`push`, etc.) requires the `gh` CLI.
 
 ## Concepts
 
