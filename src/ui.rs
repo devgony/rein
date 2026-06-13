@@ -79,6 +79,16 @@ pub struct App {
     pub moving: bool,
     pub input: String,
     pub message: String,
+    /// Active project filter: `None` shows every project, `Some(name)` scopes
+    /// the task list to one. Pre-set to the launch repo's project so `rein ui`
+    /// lands in the current project's tasks.
+    pub project_scope: Option<String>,
+    /// Every known project (incl. ones with no tasks), for the picker.
+    pub all_projects: Vec<String>,
+    /// True while the left pane is the hierarchical project picker.
+    pub picking_project: bool,
+    /// Cursor in the project picker (0 = "all projects", then `project_list()`).
+    pub project_sel: usize,
     /// Store + label of the repo `rein ui` was launched from, if any — the
     /// fallback target for `new` when no task is selected.
     pub home_store_root: Option<PathBuf>,
@@ -97,6 +107,10 @@ impl App {
             moving: false,
             input: String::new(),
             message: String::new(),
+            project_scope: None,
+            all_projects: Vec::new(),
+            picking_project: false,
+            project_sel: 0,
             home_store_root: None,
             home_label: None,
         }
@@ -109,12 +123,38 @@ impl App {
         }
     }
 
-    /// Indices into `tasks` visible under the current tab + fuzzy filter.
+    /// Canonical project list for the picker: the authoritative `all_projects`
+    /// when populated (includes empty projects), else derived from the rows.
+    pub fn project_list(&self) -> Vec<String> {
+        if !self.all_projects.is_empty() {
+            return self.all_projects.clone();
+        }
+        let mut names: Vec<String> = self
+            .tasks
+            .iter()
+            .map(|t| t.project.clone())
+            .filter(|p| !p.is_empty())
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    /// Label of the active project scope for display (`all` when unscoped).
+    pub fn scope_name(&self) -> String {
+        self.project_scope.clone().unwrap_or_else(|| "all".to_string())
+    }
+
+    /// Indices into `tasks` visible under the project scope + tab + fuzzy filter.
     pub fn visible(&self) -> Vec<usize> {
         let tab_filtered: Vec<usize> = self
             .tasks
             .iter()
             .enumerate()
+            .filter(|(_, t)| match &self.project_scope {
+                None => true,
+                Some(p) => &t.project == p,
+            })
             .filter(|(_, t)| match TABS[self.tab] {
                 None => true,
                 Some(s) => t.status == s,
@@ -204,6 +244,31 @@ impl App {
             }
             return UiAction::None;
         }
+        // hierarchical project level: pick which project scopes the task list
+        if self.picking_project {
+            let len = self.project_list().len() + 1; // +1 for "all projects"
+            match key.code {
+                KeyCode::Esc => self.picking_project = false,
+                KeyCode::Char('q') => self.picking_project = false,
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.project_sel = (self.project_sel + 1).min(len - 1);
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.project_sel = self.project_sel.saturating_sub(1);
+                }
+                KeyCode::Enter => {
+                    self.project_scope = if self.project_sel == 0 {
+                        None
+                    } else {
+                        self.project_list().get(self.project_sel - 1).cloned()
+                    };
+                    self.picking_project = false;
+                    self.selected = 0; // task selection is stale under a new scope
+                }
+                _ => {}
+            }
+            return UiAction::None;
+        }
         if self.filtering {
             match key.code {
                 KeyCode::Esc => {
@@ -251,6 +316,19 @@ impl App {
                 if let Some(t) = self.selected_task() {
                     return UiAction::Edit(t.path.clone());
                 }
+            }
+            KeyCode::Char('P') => {
+                // open the project level with the cursor on the current scope
+                self.project_sel = match &self.project_scope {
+                    None => 0,
+                    Some(p) => self
+                        .project_list()
+                        .iter()
+                        .position(|n| n == p)
+                        .map(|i| i + 1)
+                        .unwrap_or(0),
+                };
+                self.picking_project = true;
             }
             KeyCode::Char('n') => {
                 self.creating = true;
@@ -304,6 +382,53 @@ impl App {
     }
 
     fn render_list(&self, f: &mut Frame, area: Rect) {
+        if self.picking_project {
+            self.render_project_picker(f, area);
+        } else {
+            self.render_task_list(f, area);
+        }
+    }
+
+    /// The project level of the hierarchy: every project with its task count,
+    /// plus an "all projects" aggregate. Selecting one scopes the task list.
+    fn render_project_picker(&self, f: &mut Frame, area: Rect) {
+        let projects = self.project_list();
+        let count = |scope: Option<&str>| {
+            self.tasks
+                .iter()
+                .filter(|t| scope.is_none_or(|p| t.project == p))
+                .count()
+        };
+        let mut entries: Vec<(String, usize)> = vec![("all projects".to_string(), count(None))];
+        entries.extend(projects.iter().map(|p| (p.clone(), count(Some(p)))));
+
+        let sel = self.project_sel.min(entries.len().saturating_sub(1));
+        let items: Vec<ListItem> = entries
+            .iter()
+            .enumerate()
+            .map(|(row, (name, n))| {
+                let marker = if row == sel { "▶ " } else { "  " };
+                let style = if row == sel {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(Line::from(vec![
+                    Span::raw(marker),
+                    Span::styled(format!("{} ", name), Style::default().fg(Color::Magenta)),
+                    Span::styled(format!("({})", n), style),
+                ]))
+            })
+            .collect();
+        let list = List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" projects — Enter to select · Esc cancel "),
+        );
+        f.render_widget(list, area);
+    }
+
+    fn render_task_list(&self, f: &mut Frame, area: Rect) {
         let vis = self.visible();
         let items: Vec<ListItem> = vis
             .iter()
@@ -327,7 +452,8 @@ impl App {
                         Style::default().fg(status_color(t.status)),
                     ),
                 ];
-                if !t.project.is_empty() {
+                // a project tag is redundant once a single project is scoped
+                if self.project_scope.is_none() && !t.project.is_empty() {
                     spans.push(Span::styled(
                         format!("{} ", t.project),
                         Style::default().fg(Color::Magenta),
@@ -338,7 +464,8 @@ impl App {
             })
             .collect();
         let title = format!(
-            " tasks ({}) {} ",
+            " tasks [{} · {}] {} ",
+            self.scope_name(),
             self.tab_name(),
             if self.filter.is_empty() {
                 String::new()
@@ -376,12 +503,14 @@ impl App {
                 "move {} to: [i]nbox [a]ctive [d]one [c]anceled · Esc cancel",
                 slug
             )
+        } else if self.picking_project {
+            "j/k move · Enter select project · Esc cancel".to_string()
         } else if self.filtering {
             format!("/{}", self.filter)
         } else if !self.message.is_empty() {
             self.message.clone()
         } else {
-            "j/k move · Tab status · Enter edit · n new · s start · m move · d done · p issue/push · / filter · q quit"
+            "j/k move · Tab status · P project · Enter edit · n new · s start · m move · d done · p issue/push · / filter · q quit"
                 .to_string()
         };
         f.render_widget(Paragraph::new(text).style(Style::default().fg(Color::DarkGray)), area);
@@ -492,8 +621,16 @@ pub fn run() -> Result<()> {
     }
 
     let mut app = App::new(load_all_rows(&projects));
+    app.all_projects = {
+        let mut names: Vec<String> = projects.iter().map(|p| p.project.clone()).collect();
+        names.sort();
+        names.dedup();
+        names
+    };
     app.home_store_root = home_info.as_ref().map(|h| h.store.root.clone());
     app.home_label = home_info.as_ref().map(|h| h.project.clone());
+    // launched inside a project → land scoped to it; the picker (P) goes wider
+    app.project_scope = home_info.as_ref().map(|h| h.project.clone());
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();

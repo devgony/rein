@@ -34,6 +34,26 @@ fn rows_in(project: &str) -> Vec<TaskRow> {
     ]
 }
 
+/// Rows spanning two projects (acme/web has 2, tools has 1).
+fn rows_multi() -> Vec<TaskRow> {
+    let mk = |slug: &str, project: &str, status: Status| TaskRow {
+        id: format!("task-20260613-{}", slug),
+        slug: slug.to_string(),
+        title: format!("{} title", slug),
+        status,
+        path: PathBuf::from(format!("/store/{}/{}/{}.md", project, status.as_str(), slug)),
+        body: format!("## Goal\n\n{}", slug),
+        has_issue: false,
+        project: project.to_string(),
+        store_root: PathBuf::from(format!("/store/{}", project)),
+    };
+    vec![
+        mk("web-a", "acme/web", Status::Inbox),
+        mk("web-b", "acme/web", Status::Active),
+        mk("tools-a", "tools", Status::Inbox),
+    ]
+}
+
 fn draw(app: &App) -> String {
     let backend = TestBackend::new(160, 30);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -239,4 +259,61 @@ fn keybinding_hint_advertises_new_and_move() {
     let screen = draw(&app);
     assert!(screen.contains("n new"));
     assert!(screen.contains("m move"));
+    assert!(screen.contains("P project"));
+}
+
+#[test]
+fn project_scope_filters_task_list() {
+    let mut app = App::new(rows_multi());
+    // unscoped: every project's tasks are visible, tagged by project
+    assert_eq!(app.visible().len(), 3);
+    let screen = draw(&app);
+    assert!(screen.contains("tasks [all · all]"));
+    assert!(screen.contains("acme/web"));
+    assert!(screen.contains("tools"));
+
+    // scoping to one project hides the others (and the now-redundant tag)
+    app.project_scope = Some("acme/web".into());
+    assert_eq!(app.visible().len(), 2);
+    assert!(app.visible().iter().all(|&i| app.tasks[i].project == "acme/web"));
+    let screen = draw(&app);
+    assert!(screen.contains("tasks [acme/web · all]"));
+    assert!(screen.contains("web-a — web-a title"));
+    assert!(!screen.contains("tools-a"));
+}
+
+#[test]
+fn project_picker_navigates_and_scopes() {
+    let mut app = App::new(rows_multi());
+    // P opens the hierarchical project level, listing projects with counts
+    assert_eq!(key(&mut app, KeyCode::Char('P')), UiAction::None);
+    assert!(app.picking_project);
+    let screen = draw(&app);
+    assert!(screen.contains("projects"));
+    assert!(screen.contains("all projects (3)"));
+    assert!(screen.contains("acme/web (2)"));
+    assert!(screen.contains("tools (1)"));
+
+    // j to "acme/web" (index 1), Enter scopes the task list to it
+    key(&mut app, KeyCode::Char('j'));
+    key(&mut app, KeyCode::Enter);
+    assert!(!app.picking_project);
+    assert_eq!(app.project_scope.as_deref(), Some("acme/web"));
+    assert_eq!(app.visible().len(), 2);
+
+    // reopening pre-positions the cursor on the active scope; "all" resets it
+    key(&mut app, KeyCode::Char('P'));
+    assert_eq!(app.project_sel, 1, "cursor sits on the current scope");
+    key(&mut app, KeyCode::Char('k')); // up to "all projects"
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.project_scope, None);
+    assert_eq!(app.visible().len(), 3);
+
+    // Esc cancels without changing scope
+    app.project_scope = Some("tools".into());
+    key(&mut app, KeyCode::Char('P'));
+    key(&mut app, KeyCode::Char('j'));
+    key(&mut app, KeyCode::Esc);
+    assert!(!app.picking_project);
+    assert_eq!(app.project_scope.as_deref(), Some("tools"));
 }
