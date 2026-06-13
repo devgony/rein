@@ -6,7 +6,12 @@ use rein::ui::{App, TaskRow, UiAction};
 use std::path::PathBuf;
 
 fn rows() -> Vec<TaskRow> {
-    let mk = |slug: &str, title: &str, status: Status, body: &str| TaskRow {
+    rows_in("")
+}
+
+fn rows_in(project: &str) -> Vec<TaskRow> {
+    let project = project.to_string();
+    let mk = move |slug: &str, title: &str, status: Status, body: &str| TaskRow {
         id: format!("task-20260613-{}", slug),
         slug: slug.to_string(),
         title: title.to_string(),
@@ -14,6 +19,8 @@ fn rows() -> Vec<TaskRow> {
         path: PathBuf::from(format!("/store/{}/{}.md", status.as_str(), slug)),
         body: body.to_string(),
         has_issue: false,
+        project: project.clone(),
+        store_root: PathBuf::from("/store"),
     };
     vec![
         mk(
@@ -140,4 +147,96 @@ fn keys_dispatch_to_cli_verbs() {
     assert_eq!(action, UiAction::Publish("task-20260613-auth-refactor".into()));
     // q quits
     assert_eq!(key(&mut app, KeyCode::Char('q')), UiAction::Quit);
+}
+
+#[test]
+fn n_creates_task_via_input_mode() {
+    let mut app = App::new(rows());
+    // n opens a title prompt; typed chars do not trigger other verbs
+    assert_eq!(key(&mut app, KeyCode::Char('n')), UiAction::None);
+    assert!(app.creating);
+    for c in "my new task".chars() {
+        assert_eq!(key(&mut app, KeyCode::Char(c)), UiAction::None);
+    }
+    let screen = draw(&app);
+    assert!(screen.contains("new task"));
+    assert!(screen.contains("my new task"));
+    // Enter emits the create action and leaves input mode
+    let action = key(&mut app, KeyCode::Enter);
+    assert_eq!(action, UiAction::New("my new task".into()));
+    assert!(!app.creating);
+
+    // Esc cancels without creating
+    key(&mut app, KeyCode::Char('n'));
+    key(&mut app, KeyCode::Char('x'));
+    assert_eq!(key(&mut app, KeyCode::Esc), UiAction::None);
+    assert!(!app.creating);
+    assert!(app.input.is_empty());
+}
+
+#[test]
+fn m_moves_selected_task_to_any_state() {
+    let mut app = App::new(rows());
+    // selected = inbox task; m then d moves it to done (a backward-or-forward
+    // transition the one-shot verbs don't offer)
+    assert_eq!(key(&mut app, KeyCode::Char('m')), UiAction::None);
+    assert!(app.moving);
+    let screen = draw(&app);
+    assert!(screen.contains("move settings-cleanup to:"));
+    let action = key(&mut app, KeyCode::Char('d'));
+    assert_eq!(
+        action,
+        UiAction::Move("task-20260613-settings-cleanup".into(), Status::Done)
+    );
+    assert!(!app.moving);
+
+    // m then a on the done task reopens it to active
+    let mut app = App::new(rows());
+    for _ in 0..2 {
+        key(&mut app, KeyCode::Char('j'));
+    }
+    assert_eq!(app.selected_task().unwrap().slug, "old-thing");
+    key(&mut app, KeyCode::Char('m'));
+    let action = key(&mut app, KeyCode::Char('a'));
+    assert_eq!(
+        action,
+        UiAction::Move("task-20260613-old-thing".into(), Status::Active)
+    );
+
+    // moving to the current state is a no-op with a message
+    let mut app = App::new(rows());
+    key(&mut app, KeyCode::Char('m'));
+    let action = key(&mut app, KeyCode::Char('i')); // already inbox
+    assert_eq!(action, UiAction::None);
+    assert!(app.message.contains("already inbox"));
+
+    // any non-target key cancels move mode
+    let mut app = App::new(rows());
+    key(&mut app, KeyCode::Char('m'));
+    assert_eq!(key(&mut app, KeyCode::Char('z')), UiAction::None);
+    assert!(!app.moving);
+}
+
+#[test]
+fn project_label_renders_and_filters() {
+    let mut app = App::new(rows_in("acme/web"));
+    let screen = draw(&app);
+    // each row is tagged with its project for the cross-project view
+    assert!(screen.contains("acme/web"));
+    assert!(screen.contains("settings-cleanup — Settings cleanup"));
+
+    // the fuzzy filter also matches on project name (doubles as a project picker)
+    key(&mut app, KeyCode::Char('/'));
+    for c in "acme".chars() {
+        key(&mut app, KeyCode::Char(c));
+    }
+    assert_eq!(app.visible().len(), 3, "all tasks share the project");
+}
+
+#[test]
+fn keybinding_hint_advertises_new_and_move() {
+    let app = App::new(rows());
+    let screen = draw(&app);
+    assert!(screen.contains("n new"));
+    assert!(screen.contains("m move"));
 }

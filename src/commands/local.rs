@@ -48,20 +48,27 @@ pub fn init(skill: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn new(ctx: &Ctx, title: &str, shared: bool) -> Result<()> {
-    let slug = ctx.store.unique_slug(&util::slugify(title));
+/// Create an inbox task draft in `store`. Returns its id and document path.
+/// Store-only (no repo) so the TUI can create in any discovered project.
+pub fn create_task(store: &Store, title: &str, shared: bool) -> Result<(String, std::path::PathBuf)> {
+    let slug = store.unique_slug(&util::slugify(title));
     let id = format!("task-{}-{}", util::today_compact(), slug);
     let doc = TaskDoc::template(&id, title, "inbox", &util::now_iso(), shared);
-    let path = ctx.store.status_dir(Status::Inbox).join(format!("{}.md", slug));
+    let path = store.status_dir(Status::Inbox).join(format!("{}.md", slug));
     if path.exists() {
         bail!("file already exists: {}", path.display());
     }
-    ctx.store.write_doc(&path, &doc)?;
+    store.write_doc(&path, &doc)?;
     let st = TaskState {
         path: format!("inbox/{}.md", slug),
         ..Default::default()
     };
-    state::save(&ctx.store, &id, &st)?;
+    state::save(store, &id, &st)?;
+    Ok((id, path))
+}
+
+pub fn new(ctx: &Ctx, title: &str, shared: bool) -> Result<()> {
+    let (id, path) = create_task(&ctx.store, title, shared)?;
     println!("{}", id);
     println!("{}", path.display());
     Ok(())
@@ -106,7 +113,7 @@ pub fn open(ctx: &Ctx, task: Option<&str>) -> Result<()> {
     edit_file(&path)?;
     // assign stable IDs to whatever items the user just wrote in $EDITOR
     if let Some(t) = ctx.store.list_tasks().into_iter().find(|t| t.path == path) {
-        crate::commands::assign_ids(ctx, &t)?;
+        crate::commands::assign_ids(&ctx.store, &t)?;
     }
     Ok(())
 }
@@ -218,7 +225,7 @@ pub fn doctor(ctx: &Ctx) -> Result<()> {
         }
         // assign any missing item IDs (heals docs edited outside sync)
         let fresh = ctx.store.find_by_id(&t.id).unwrap_or_else(|| t.clone());
-        crate::commands::assign_ids(ctx, &fresh)?;
+        crate::commands::assign_ids(&ctx.store, &fresh)?;
         let rel = t
             .path
             .strip_prefix(&ctx.store.root)

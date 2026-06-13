@@ -10,7 +10,7 @@ use anyhow::{bail, Context, Result};
 
 /// Assign item IDs at the issue/push/pull touchpoints (shared local helper).
 fn ensure_ids_saved(ctx: &Ctx, task: &TaskRef) -> Result<TaskRef> {
-    crate::commands::assign_ids(ctx, task)
+    crate::commands::assign_ids(&ctx.store, task)
 }
 
 /// `rein issue <task>` — publish a local doc as a new GitHub issue.
@@ -23,7 +23,7 @@ pub fn issue(ctx: &Ctx, query: &str) -> Result<()> {
     let task = ensure_ids_saved(ctx, &task)?;
     let block = task::issue_projection(&task.doc);
 
-    let gh = Gh::new();
+    let gh = Gh::in_dir(&ctx.repo.workdir);
     gh.ensure_label();
     let number = gh.issue_create(&task.doc.front.title, &block)?;
 
@@ -43,7 +43,7 @@ pub fn issue(ctx: &Ctx, query: &str) -> Result<()> {
 /// the marker task ID (or the issue number) is the identity.
 pub fn pull_inbox(ctx: &Ctx) -> Result<()> {
     let _lock = SyncLock::acquire(&ctx.store)?;
-    let gh = Gh::new();
+    let gh = Gh::in_dir(&ctx.repo.workdir);
     let issues = gh.issue_list_rein()?;
     let mut imported = 0;
     let mut updated = 0;
@@ -148,7 +148,7 @@ pub fn pull(ctx: &Ctx) -> Result<()> {
         .front
         .github_issue
         .with_context(|| format!("'{}' has no attached issue", task.slug))?;
-    let gh = Gh::new();
+    let gh = Gh::in_dir(&ctx.repo.workdir);
     let remote_body = gh.issue_view_body(number)?;
     let changed = pull_into(ctx, &task, &remote_body, true)?;
     println!(
@@ -173,7 +173,7 @@ pub fn push_task(ctx: &Ctx, task: &TaskRef, resolved: bool) -> Result<()> {
         bail!("'{}' has neither issue nor PR attached", task.slug);
     }
     let task = ensure_ids_saved(ctx, &task)?;
-    let gh = Gh::new();
+    let gh = Gh::in_dir(&ctx.repo.workdir);
 
     if let Some(number) = task.doc.front.github_issue {
         push_surface(ctx, &task, &gh, Surface::Issue(number), resolved)?;

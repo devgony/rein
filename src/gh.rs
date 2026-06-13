@@ -1,12 +1,17 @@
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// Thin `gh` CLI transport. `REIN_GH` overrides the binary (used by e2e tests
 /// to inject a fake gh).
 pub struct Gh {
     bin: String,
+    /// Directory to run `gh` in. `gh` infers the target repo from its cwd, so
+    /// this must be the task's repo — essential once the dashboard drives
+    /// actions across projects from an arbitrary launch directory.
+    cwd: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -20,7 +25,16 @@ pub struct RemoteIssue {
 impl Gh {
     pub fn new() -> Gh {
         let bin = std::env::var("REIN_GH").unwrap_or_else(|_| "gh".to_string());
-        Gh { bin }
+        Gh { bin, cwd: None }
+    }
+
+    /// `gh` bound to a repo directory, so its target repo is unambiguous
+    /// regardless of where the rein process was launched.
+    pub fn in_dir(dir: &Path) -> Gh {
+        Gh {
+            cwd: Some(dir.to_path_buf()),
+            ..Gh::new()
+        }
     }
 
     fn run(&self, args: &[&str], stdin: Option<&str>) -> Result<String> {
@@ -28,6 +42,9 @@ impl Gh {
         cmd.args(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if let Some(dir) = &self.cwd {
+            cmd.current_dir(dir);
+        }
         cmd.stdin(if stdin.is_some() {
             Stdio::piped()
         } else {

@@ -2,7 +2,7 @@ use crate::gh::Gh;
 use crate::gitx::{self, Repo};
 use crate::resolve;
 use crate::state;
-use crate::store::{Status, TaskRef};
+use crate::store::{Status, Store, TaskRef};
 use crate::task;
 use crate::util;
 use crate::Ctx;
@@ -67,7 +67,7 @@ pub fn start(
         if !worktree && branch.is_none() {
             bail!("--draft-pr requires --worktree or --branch");
         }
-        let gh = Gh::new();
+        let gh = Gh::in_dir(&ctx.repo.workdir);
         let task = ctx.store.find_by_id(&task.id).context("task missing")?;
         let body = task::pr_projection(&task.doc);
         let number = gh.pr_create_draft(&task.doc.front.title, &body, &branch_name)?;
@@ -81,7 +81,7 @@ pub fn start(
             let _ = gh.issue_comment(issue, &format!("Started in PR #{}", number));
         }
     } else if let Some(issue) = task.doc.front.github_issue {
-        let gh = Gh::new();
+        let gh = Gh::in_dir(&ctx.repo.workdir);
         let _ = gh.issue_comment(issue, &format!("Started on branch `{}`", branch_name));
     }
 
@@ -120,7 +120,7 @@ fn resolve_for_mutation(ctx: &Ctx, flag: Option<&str>) -> Result<TaskRef> {
     let (task, source) = resolve::resolve_task(ctx, flag)?;
     resolve::gate_mutation(ctx, source)?;
     // local touchpoint: assign item IDs so checking works without GitHub sync
-    crate::commands::assign_ids(ctx, &task)
+    crate::commands::assign_ids(&ctx.store, &task)
 }
 
 /// Turn a bare "item not found" into actionable guidance.
@@ -193,6 +193,40 @@ pub fn fail(ctx: &Ctx, item_id: &str, reason: &str, flag: Option<&str>) -> Resul
 }
 
 // ---------------------------------------------------------------------------
+// move (free-form state transition)
+// ---------------------------------------------------------------------------
+
+/// Relocate a task to any status — a plain directory move with frontmatter and
+/// state-path sync, no GitHub or worktree side effects. Store-only so the TUI
+/// can move tasks in any discovered project. The rich forward verbs (`start`,
+/// `done`, `cancel`) own the side effects; this is the escape hatch that makes
+/// every transition reversible (e.g. reopen a done task back to active).
+pub fn relocate(store: &Store, task: &TaskRef, to: Status) -> Result<PathBuf> {
+    let new_path = store.move_task(task, to)?;
+    let mut st = state::load(store, &task.id);
+    st.path = new_path
+        .strip_prefix(&store.root)
+        .unwrap_or(&new_path)
+        .to_string_lossy()
+        .to_string();
+    state::save(store, &task.id, &st)?;
+    Ok(new_path)
+}
+
+/// `rein move <task> <status>` — move a task between any two states.
+pub fn move_to(ctx: &Ctx, query: &str, status: &str) -> Result<()> {
+    let to = Status::parse(status)
+        .with_context(|| format!("unknown status '{}' (inbox|active|done|canceled)", status))?;
+    let task = ctx.store.find(query)?;
+    if task.status == to {
+        bail!("'{}' is already {}", task.slug, to.as_str());
+    }
+    relocate(&ctx.store, &task, to)?;
+    println!("moved {} {} → {}", task.slug, task.status.as_str(), to.as_str());
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // done / cancel
 // ---------------------------------------------------------------------------
 
@@ -238,7 +272,7 @@ pub fn done(ctx: &Ctx, query: Option<&str>, keep_worktree: bool) -> Result<()> {
     ctx.store.move_task(&task, Status::Done)?;
 
     let front = &task.doc.front;
-    let gh = Gh::new();
+    let gh = Gh::in_dir(&ctx.repo.workdir);
     if let Some(pr) = front.github_pr {
         if let Err(e) = final_pr_update(ctx, &task, pr, &gh) {
             eprintln!("warning: failed to update PR #{}: {}", pr, e);
@@ -313,7 +347,7 @@ pub fn cancel(ctx: &Ctx, query: Option<&str>, keep_worktree: bool, force: bool) 
     ctx.store.move_task(&task, Status::Canceled)?;
 
     if let Some(issue) = task.doc.front.github_issue {
-        let gh = Gh::new();
+        let gh = Gh::in_dir(&ctx.repo.workdir);
         if let Err(e) = gh.issue_close(issue, true, "Canceled via rein.") {
             eprintln!("warning: failed to close issue #{}: {}", issue, e);
         }

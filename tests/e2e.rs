@@ -686,6 +686,58 @@ fn cancel_force_discards_dirty_worktree() {
 }
 
 #[test]
+fn move_transitions_any_direction_without_side_effects() {
+    let env = setup();
+    init(&env);
+    let root = store_root(&env);
+    rein(&env, &env.repo).args(["new", "wander"]).assert().success();
+
+    // inbox → active is a plain relocation: no current pointer, no worktree
+    rein(&env, &env.repo)
+        .args(["move", "wander", "active"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("moved wander inbox → active"));
+    assert!(root.join("active/wander.md").exists());
+    assert!(!root.join("inbox/wander.md").exists());
+    assert!(read(&root.join("active/wander.md")).contains("status: active"));
+    assert!(!root.join("current").exists(), "move must not claim current");
+
+    // active → done, then the previously-impossible backward hop done → inbox
+    rein(&env, &env.repo)
+        .args(["move", "wander", "done"])
+        .assert()
+        .success();
+    let month = chrono::Local::now().format("%Y-%m").to_string();
+    assert!(root.join("done").join(&month).join("wander.md").exists());
+
+    rein(&env, &env.repo)
+        .args(["move", "wander", "inbox"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("done → inbox"));
+    assert!(root.join("inbox/wander.md").exists());
+    assert!(read(&root.join("inbox/wander.md")).contains("status: inbox"));
+
+    // state path cache follows the file
+    let id = task_id(&env, "inbox", "wander");
+    let st = read(&root.join("state").join(format!("{}.json", id)));
+    assert!(st.contains("inbox/wander.md"));
+
+    // guards: same-state and unknown-state are rejected
+    rein(&env, &env.repo)
+        .args(["move", "wander", "inbox"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already inbox"));
+    rein(&env, &env.repo)
+        .args(["move", "wander", "nope"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown status"));
+}
+
+#[test]
 fn doctor_rebuilds_state_and_fixes_drift() {
     let env = setup();
     init(&env);

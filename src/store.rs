@@ -50,6 +50,18 @@ pub struct Store {
     pub root: PathBuf,
 }
 
+/// A store paired with the project it belongs to — used by the cross-project
+/// dashboard to label tasks and locate each task's repo for git/gh actions.
+#[derive(Debug, Clone)]
+pub struct StoreInfo {
+    pub store: Store,
+    /// Human-friendly project name (remote `owner/repo`, else repo dir name).
+    pub project: String,
+    /// The repo working directory, derived from `meta.json`'s common_dir.
+    /// `None` if the hint is missing or the path can't be inferred.
+    pub repo_dir: Option<PathBuf>,
+}
+
 fn data_home() -> PathBuf {
     if let Ok(x) = std::env::var("XDG_DATA_HOME") {
         if !x.is_empty() {
@@ -58,6 +70,23 @@ fn data_home() -> PathBuf {
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home).join(".local/share")
+}
+
+/// Pull `owner/repo` out of a git remote URL (https or ssh forms).
+fn owner_repo_from_remote(remote: &str) -> Option<String> {
+    let tail = remote
+        .trim()
+        .trim_end_matches('/')
+        .strip_suffix(".git")
+        .unwrap_or_else(|| remote.trim().trim_end_matches('/'));
+    // ssh: git@host:owner/repo  |  https: https://host/owner/repo
+    let path = tail.rsplit_once(':').map(|(_, p)| p).unwrap_or(tail);
+    let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    if segs.len() >= 2 {
+        Some(format!("{}/{}", segs[segs.len() - 2], segs[segs.len() - 1]))
+    } else {
+        None
+    }
 }
 
 impl Store {
@@ -102,6 +131,74 @@ impl Store {
                 ))
             }
         }
+    }
+
+    /// Directory holding every per-repo store (`<data home>/rein/`).
+    pub fn rein_dir() -> PathBuf {
+        data_home().join("rein")
+    }
+
+    /// Read this store's project hints from `meta.json` (common_dir, remote)
+    /// and derive a display name. Never fails — falls back to the store key.
+    pub fn info(&self) -> StoreInfo {
+        let (common_dir, remote) = match fs::read_to_string(self.root.join("meta.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        {
+            Some(v) => (
+                v.get("common_dir")
+                    .and_then(|x| x.as_str())
+                    .map(PathBuf::from),
+                v.get("remote").and_then(|x| x.as_str()).map(str::to_string),
+            ),
+            None => (None, None),
+        };
+        // common_dir is the `.git` dir; its parent is the repo working tree.
+        let repo_dir = common_dir.as_ref().and_then(|c| c.parent().map(PathBuf::from));
+        let project = remote
+            .as_deref()
+            .and_then(owner_repo_from_remote)
+            .or_else(|| {
+                repo_dir
+                    .as_ref()
+                    .and_then(|d| d.file_name())
+                    .and_then(|n| n.to_str())
+                    .map(str::to_string)
+            })
+            .or_else(|| {
+                self.root
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "?".to_string());
+        StoreInfo {
+            store: self.clone(),
+            project,
+            repo_dir,
+        }
+    }
+
+    /// Enumerate every store under a given rein directory (testable core).
+    pub fn discover_in(rein_dir: &Path) -> Vec<StoreInfo> {
+        let mut out = Vec::new();
+        let Ok(entries) = fs::read_dir(rein_dir) else {
+            return out;
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            // a store is a directory holding meta.json (skip stray files)
+            if p.is_dir() && p.join("meta.json").is_file() {
+                out.push(Store { root: p }.info());
+            }
+        }
+        out.sort_by(|a, b| a.project.cmp(&b.project));
+        out
+    }
+
+    /// Enumerate every per-repo store on this machine for the global dashboard.
+    pub fn discover_all() -> Vec<StoreInfo> {
+        Self::discover_in(&Self::rein_dir())
     }
 
     pub fn ensure_layout(&self, repo: &Repo) -> Result<()> {
@@ -276,5 +373,68 @@ impl Store {
             fs::remove_file(f)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn owner_repo_parses_https_and_ssh() {
+        assert_eq!(
+            owner_repo_from_remote("https://github.com/acme/web.git").as_deref(),
+            Some("acme/web")
+        );
+        assert_eq!(
+            owner_repo_from_remote("git@github.com:acme/web.git").as_deref(),
+            Some("acme/web")
+        );
+        assert_eq!(
+            owner_repo_from_remote("https://gitlab.com/group/sub/proj").as_deref(),
+            Some("sub/proj")
+        );
+        assert_eq!(owner_repo_from_remote("not-a-url"), None);
+    }
+
+    #[test]
+    fn discover_in_enumerates_stores_with_project_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rein = tmp.path().join("rein");
+
+        // store A: remote-derived name
+        let a = rein.join("aaaa");
+        fs::create_dir_all(&a).unwrap();
+        fs::write(
+            a.join("meta.json"),
+            r#"{"version":1,"common_dir":"/home/me/web/.git","remote":"git@github.com:acme/web.git"}"#,
+        )
+        .unwrap();
+
+        // store B: no remote → falls back to the repo dir name
+        let b = rein.join("bbbb");
+        fs::create_dir_all(&b).unwrap();
+        fs::write(
+            b.join("meta.json"),
+            r#"{"version":1,"common_dir":"/home/me/tools/.git","remote":null}"#,
+        )
+        .unwrap();
+
+        // a stray file (not a store dir) is ignored
+        fs::write(rein.join("loose.txt"), "x").unwrap();
+
+        let infos = Store::discover_in(&rein);
+        assert_eq!(infos.len(), 2);
+        // sorted by project name: "acme/web" < "tools"
+        assert_eq!(infos[0].project, "acme/web");
+        assert_eq!(infos[0].repo_dir.as_deref(), Some(Path::new("/home/me/web")));
+        assert_eq!(infos[1].project, "tools");
+        assert_eq!(infos[1].repo_dir.as_deref(), Some(Path::new("/home/me/tools")));
+    }
+
+    #[test]
+    fn discover_in_missing_dir_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(Store::discover_in(&tmp.path().join("nope")).is_empty());
     }
 }

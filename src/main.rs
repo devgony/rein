@@ -39,6 +39,12 @@ enum Cmd {
     },
     /// Switch the task binding (worktree pointer inside a bound worktree, current file otherwise)
     Use { task: String },
+    /// Move a task to any state (plain relocation; no worktree/GitHub effects)
+    Move {
+        task: String,
+        /// Target state: inbox | active | done | canceled
+        status: String,
+    },
     /// Claim a task: inbox → active (optionally in a new worktree)
     Start {
         task: String,
@@ -124,17 +130,22 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
-    if let Cmd::Init { skill } = &cli.cmd {
-        return local::init(*skill);
+    // Commands that must run without a resolved store: init creates it; ui is a
+    // cross-project dashboard that discovers every store and works anywhere.
+    match &cli.cmd {
+        Cmd::Init { skill } => return local::init(*skill),
+        Cmd::Ui => return rein::ui::run(),
+        _ => {}
     }
     let ctx = Ctx::load()?;
     match cli.cmd {
-        Cmd::Init { .. } => unreachable!(),
+        Cmd::Init { .. } | Cmd::Ui => unreachable!(),
         Cmd::New { title, shared } => local::new(&ctx, &title, shared),
         Cmd::List { status } => local::list(&ctx, status.as_deref()),
         Cmd::Open { task } => local::open(&ctx, task.as_deref()),
         Cmd::Current { path } => local::current(&ctx, path),
         Cmd::Use { task } => local::use_task(&ctx, &task),
+        Cmd::Move { task, status } => exec::move_to(&ctx, &task, &status),
         Cmd::Start {
             task,
             worktree,
@@ -167,6 +178,5 @@ fn run() -> Result<()> {
         Cmd::Doctor => local::doctor(&ctx),
         Cmd::Status => local::status(&ctx),
         Cmd::Root => local::root(&ctx),
-        Cmd::Ui => rein::ui::run(&ctx),
     }
 }
