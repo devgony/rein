@@ -220,7 +220,9 @@ pub fn todo(ctx: &Ctx, flag: Option<&str>, all: bool) -> Result<()> {
     let sections = crate::task::item_sections(&assigned);
     let mut last: Option<&str> = None;
     for (it, section) in items.iter().zip(sections.iter()) {
-        if !all && it.checked {
+        // resolved items (done or failed) drop out of the default todo list so a
+        // re-run never re-attempts a blocked item; --all surfaces them, marked.
+        if !all && (it.checked || it.failed) {
             continue;
         }
         if Some(section.as_str()) != last {
@@ -231,7 +233,14 @@ pub fn todo(ctx: &Ctx, flag: Option<&str>, all: bool) -> Result<()> {
         }
         let id = it.id.as_deref().unwrap_or("-");
         if all {
-            println!("{}\t[{}] {}", id, if it.checked { "x" } else { " " }, it.text);
+            let mark = if it.failed {
+                "!"
+            } else if it.checked {
+                "x"
+            } else {
+                " "
+            };
+            println!("{}\t[{}] {}", id, mark, it.text);
         } else {
             println!("{}\t{}", id, it.text);
         }

@@ -174,21 +174,39 @@ pub fn log(ctx: &Ctx, text: &str, flag: Option<&str>) -> Result<()> {
 
 pub fn fail(ctx: &Ctx, item_id: &str, reason: &str, flag: Option<&str>) -> Result<()> {
     let task = resolve_for_mutation(ctx, flag)?;
-    // validate the item exists; the box stays unchecked, the blocker goes to the log
-    if !task::scan_items(&task.doc.body)
-        .iter()
-        .any(|i| i.id.as_deref() == Some(item_id))
-    {
-        return Err(item_error_hint(ctx, &task, item_id, anyhow!("item '{}' not found", item_id)));
-    }
     let mut doc = task.doc.clone();
+    // resolve the item as failed: checked box (terminal, drops out of `todo`)
+    // plus a visible ~~strike~~ ❌; this also validates the item exists.
+    doc.body = match task::set_failed(&doc.body, item_id) {
+        Ok(body) => body,
+        Err(e) => return Err(item_error_hint(ctx, &task, item_id, e)),
+    };
+    // the blocker reason still lands in the (local, non-projected) Agent Log
     doc.body = task::append_log(
         &doc.body,
         &format!("{} FAIL {}: {}", util::now_iso(), item_id, reason),
     );
     doc.touch();
     ctx.store.write_doc(&task.path, &doc)?;
-    println!("recorded blocker on {} in {}", item_id, task.slug);
+    println!(
+        "failed {} in {} (resolved as not-done; `rein retry {}` to reopen)",
+        item_id, task.slug, item_id
+    );
+    Ok(())
+}
+
+/// Reopen a failed item — the inverse of `fail`.
+pub fn retry(ctx: &Ctx, item_id: &str, flag: Option<&str>) -> Result<()> {
+    let task = resolve_for_mutation(ctx, flag)?;
+    let mut doc = task.doc.clone();
+    doc.body = match task::clear_failed(&doc.body, item_id) {
+        Ok(body) => body,
+        Err(e) => return Err(item_error_hint(ctx, &task, item_id, e)),
+    };
+    doc.body = task::append_log(&doc.body, &format!("{} RETRY {}", util::now_iso(), item_id));
+    doc.touch();
+    ctx.store.write_doc(&task.path, &doc)?;
+    println!("reopened {} in {}", item_id, task.slug);
     Ok(())
 }
 

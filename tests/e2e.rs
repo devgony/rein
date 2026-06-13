@@ -413,8 +413,14 @@ fn mutations_check_uncheck_log_fail() {
         .success();
     let doc = read(&path);
     assert!(doc.contains("FAIL 1: blocked by upstream"));
-    // failed item stays unchecked
+    // fail resolves the item: checked box + failed sentinel + ~~strike~~ ❌
+    assert!(doc.contains("- [x] <!-- task:1 --> <!-- failed --> ~~Do thing one~~ ❌"));
+
+    // retry reopens it: back to an unchecked, undecorated item + a RETRY log line
+    rein(&env, &env.repo).args(["retry", "1"]).assert().success();
+    let doc = read(&path);
     assert!(doc.contains("- [ ] <!-- task:1 --> Do thing one"));
+    assert!(doc.contains("RETRY 1"));
 
     // unknown item errors and lists what's available
     rein(&env, &env.repo)
@@ -567,6 +573,48 @@ fn todo_lists_unchecked_items_grouped_by_section() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Do thing one"));
+}
+
+#[test]
+fn fail_drops_item_from_todo_until_retried() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    seed_items(&env, "demo"); // Tasks: 1,2 · Validation: 3
+    rein(&env, &env.repo).args(["start", "demo"]).assert().success();
+
+    // fail item 1 → it drops out of the default todo list (won't be re-attempted)
+    rein(&env, &env.repo)
+        .args(["fail", "1", "--reason", "blocked"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .arg("todo")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Do thing one").not());
+
+    // --all surfaces it, marked failed with [!]
+    rein(&env, &env.repo)
+        .args(["todo", "--all"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1\t[!] Do thing one"));
+
+    // retry reopens it → back on the default list
+    rein(&env, &env.repo).args(["retry", "1"]).assert().success();
+    rein(&env, &env.repo)
+        .arg("todo")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1\tDo thing one"));
+
+    // retrying a non-failed item is refused (never silently unchecks done work)
+    rein(&env, &env.repo)
+        .args(["retry", "1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not failed"));
 }
 
 #[test]

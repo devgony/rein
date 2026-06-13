@@ -81,11 +81,17 @@ enum Cmd {
         #[arg(long)]
         task: Option<String>,
     },
-    /// Record a blocker for an item
+    /// Record a blocker for an item (resolves it as failed)
     Fail {
         item_id: String,
         #[arg(long)]
         reason: String,
+        #[arg(long)]
+        task: Option<String>,
+    },
+    /// Reopen a failed item (inverse of `fail`)
+    Retry {
+        item_id: String,
         #[arg(long)]
         task: Option<String>,
     },
@@ -169,6 +175,7 @@ fn run() -> Result<()> {
             reason,
             task,
         } => exec::fail(&ctx, &item_id, &reason, task.as_deref()),
+        Cmd::Retry { item_id, task } => exec::retry(&ctx, &item_id, task.as_deref()),
         Cmd::Issue { task } => sync_cmd::issue(&ctx, &task),
         Cmd::PullInbox => sync_cmd::pull_inbox(&ctx),
         Cmd::Pull => sync_cmd::pull(&ctx),

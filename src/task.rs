@@ -2,6 +2,13 @@ use anyhow::{bail, Context, Result};
 
 pub const AGENT_LOG_HEADING: &str = "## Agent Log";
 
+/// Machine sentinel marking a checklist item as resolved-failed (as opposed to
+/// resolved-done). It lives in an HTML comment so it stays invisible in
+/// rendered Markdown and in the projected GitHub issue.
+pub const FAILED_SENTINEL: &str = "<!-- failed -->";
+/// Visible failure mark appended to a failed item's text (renders on GitHub).
+pub const FAIL_MARK: &str = "❌";
+
 /// Parsed task document frontmatter. Unknown lines are preserved in `extra`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Frontmatter {
@@ -134,6 +141,8 @@ impl TaskDoc {
 pub struct Item {
     pub id: Option<String>,
     pub checked: bool,
+    /// Resolved as failed (box is checked, text struck through, sentinel set).
+    pub failed: bool,
     pub text: String,
     pub line: usize,
 }
@@ -162,13 +171,15 @@ pub fn scan_items(body: &str) -> Vec<Item> {
         if let Some((checked, after)) = checkbox_prefix(line) {
             let rest = &line[after..];
             let id = extract_item_id(rest);
-            let text = match rest.find("-->") {
+            let raw_text = match rest.find("-->") {
                 Some(p) if id.is_some() => rest[p + 3..].trim().to_string(),
                 _ => rest.trim().to_string(),
             };
+            let (failed, text) = decode_failed(&raw_text);
             items.push(Item {
                 id,
                 checked,
+                failed,
                 text,
                 line: i,
             });
@@ -250,6 +261,79 @@ pub fn set_checked(body: &str, item_id: &str, checked: bool) -> Result<String> {
             found = true;
             break;
         }
+    }
+    if !found {
+        bail!("item '{}' not found", item_id);
+    }
+    Ok(lines.join("\n") + "\n")
+}
+
+/// Split a failed item's decorations off its text. A failed item carries the
+/// `FAILED_SENTINEL` comment, its text wrapped in `~~strikethrough~~`, and a
+/// trailing `FAIL_MARK`. Returns `(was_failed, clean_text)`; decorations are
+/// only stripped when the sentinel is present, so plain text is never mangled.
+fn decode_failed(text: &str) -> (bool, String) {
+    let Some(rest) = text.strip_prefix(FAILED_SENTINEL) else {
+        return (false, text.to_string());
+    };
+    let mut t = rest.trim();
+    if let Some(s) = t.strip_suffix(FAIL_MARK) {
+        t = s.trim_end();
+    }
+    if let Some(inner) = t.strip_prefix("~~").and_then(|x| x.strip_suffix("~~")) {
+        t = inner;
+    }
+    (true, t.trim().to_string())
+}
+
+/// Mark an item resolved-failed: a checked box (it is terminal — no longer open
+/// work), the failed sentinel, and the text as `~~strikethrough~~ ❌` so the
+/// failure is visible wherever the Tasks block renders (including the projected
+/// GitHub issue). Idempotent.
+pub fn set_failed(body: &str, item_id: &str) -> Result<String> {
+    rewrite_item_line(body, item_id, true)
+}
+
+/// Reopen a failed item: restore `- [ ]` and strip the failed decorations.
+/// Errors if the item is not currently failed, so it can never silently uncheck
+/// a genuinely-done item.
+pub fn clear_failed(body: &str, item_id: &str) -> Result<String> {
+    rewrite_item_line(body, item_id, false)
+}
+
+fn rewrite_item_line(body: &str, item_id: &str, failed: bool) -> Result<String> {
+    let marker = format!("<!-- task:{} -->", item_id);
+    let mut lines: Vec<String> = body.lines().map(|l| l.to_string()).collect();
+    let mut found = false;
+    for line in lines.iter_mut() {
+        let Some((_, after)) = checkbox_prefix(line) else {
+            continue;
+        };
+        if !line.contains(&marker) {
+            continue;
+        }
+        let indent_len = line.len() - line.trim_start().len();
+        let indent = line[..indent_len].to_string();
+        let rest = &line[after..];
+        let raw_text = match rest.find("-->") {
+            Some(p) => rest[p + 3..].trim().to_string(),
+            None => rest.trim().to_string(),
+        };
+        let (was_failed, clean) = decode_failed(&raw_text);
+        if !failed && !was_failed {
+            bail!("item '{}' is not failed (nothing to reopen)", item_id);
+        }
+        *line = match (failed, clean.is_empty()) {
+            (true, true) => format!("{}- [x] {} {} {}", indent, marker, FAILED_SENTINEL, FAIL_MARK),
+            (true, false) => format!(
+                "{}- [x] {} {} ~~{}~~ {}",
+                indent, marker, FAILED_SENTINEL, clean, FAIL_MARK
+            ),
+            (false, true) => format!("{}- [ ] {}", indent, marker),
+            (false, false) => format!("{}- [ ] {} {}", indent, marker, clean),
+        };
+        found = true;
+        break;
     }
     if !found {
         bail!("item '{}' not found", item_id);
@@ -459,6 +543,33 @@ mod tests {
         let body = set_checked(&body, "one", false).unwrap();
         assert!(body.contains("- [ ] <!-- task:one -->"));
         assert!(set_checked(&body, "nope", true).is_err());
+    }
+
+    #[test]
+    fn fail_roundtrip() {
+        let doc = sample(); // item "one": "First thing"
+        let body = set_failed(&doc.body, "one").unwrap();
+        assert!(body.contains("- [x] <!-- task:one --> <!-- failed --> ~~First thing~~ ❌"));
+        // scan reads it as both checked and failed, with the decorations stripped
+        let it = scan_items(&body)
+            .into_iter()
+            .find(|i| i.id.as_deref() == Some("one"))
+            .unwrap();
+        assert!(it.checked && it.failed);
+        assert_eq!(it.text, "First thing");
+        // marking again is idempotent
+        assert_eq!(set_failed(&body, "one").unwrap(), body);
+        // clearing restores the original open item
+        let reopened = clear_failed(&body, "one").unwrap();
+        assert!(reopened.contains("- [ ] <!-- task:one --> First thing"));
+        let it = scan_items(&reopened)
+            .into_iter()
+            .find(|i| i.id.as_deref() == Some("one"))
+            .unwrap();
+        assert!(!it.checked && !it.failed);
+        // reopening a non-failed item is an error; unknown id is too
+        assert!(clear_failed(&reopened, "one").is_err());
+        assert!(set_failed(&doc.body, "nope").is_err());
     }
 
     #[test]
