@@ -518,6 +518,58 @@ fn status_lists_items_with_numbers() {
 }
 
 #[test]
+fn todo_lists_unchecked_items_grouped_by_section() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    seed_items(&env, "demo"); // Tasks: 1,2 · Validation: 3
+    rein(&env, &env.repo).args(["start", "demo"]).assert().success();
+
+    // default: only unchecked items, grouped under their section headings
+    rein(&env, &env.repo)
+        .arg("todo")
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("## Tasks")
+                .and(predicate::str::contains("## Validation"))
+                .and(predicate::str::contains("1\tDo thing one"))
+                .and(predicate::str::contains("2\tAdd tests later"))
+                .and(predicate::str::contains("3\tTests pass")),
+        );
+
+    // checked items drop out of the list
+    rein(&env, &env.repo).args(["check", "2"]).assert().success();
+    rein(&env, &env.repo)
+        .arg("todo")
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Do thing one")
+                .and(predicate::str::contains("Tests pass"))
+                .and(predicate::str::contains("Add tests later").not()),
+        );
+
+    // --all shows every item with its state
+    rein(&env, &env.repo)
+        .args(["todo", "--all"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("2\t[x] Add tests later")
+                .and(predicate::str::contains("1\t[ ] Do thing one")),
+        );
+
+    // --task targets a specific task regardless of resolution
+    rein(&env, &env.repo).args(["new", "other"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["todo", "--task", "demo"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Do thing one"));
+}
+
+#[test]
 fn mutation_gate_refuses_ambiguous_current() {
     let env = setup();
     init(&env);

@@ -15,11 +15,11 @@ description: Run the current LLM task document, implement unchecked tasks, updat
 disable-model-invocation: true
 ---
 
-Run `rein current --path` to find the active task document, then read it.
+Run `rein todo` to list the current task's unchecked items. Each line is `<id>` then the item text, grouped under its `## section`. Read the full document with `rein current --path` only when you need the Goal or Notes for context.
 
 Rules:
 
-1. Execute only unchecked tasks.
+1. Execute only the unchecked items `rein todo` prints.
 2. Never edit checkboxes or Agent Log in the Markdown directly. Use:
    - `rein check <item-id>` after a task is implemented and verified
    - `rein log "<text>"` to append a concise entry after each completed task
@@ -203,6 +203,37 @@ pub fn status(ctx: &Ctx) -> Result<()> {
                     it.text
                 );
             }
+        }
+    }
+    Ok(())
+}
+
+/// `rein todo [--task <id>] [--all]` — print the resolved task's unchecked
+/// checklist items (id + text, grouped by section) so the skill can get the
+/// to-do list directly instead of reading and parsing the whole document.
+/// Query-only: IDs are computed deterministically (same as assignment) without
+/// writing, so a following `rein check <id>` lands on the same number.
+pub fn todo(ctx: &Ctx, flag: Option<&str>, all: bool) -> Result<()> {
+    let (task, _) = resolve::resolve_task(ctx, flag)?;
+    let (assigned, _) = crate::task::ensure_item_ids(&task.doc.body);
+    let items = crate::task::scan_items(&assigned);
+    let sections = crate::task::item_sections(&assigned);
+    let mut last: Option<&str> = None;
+    for (it, section) in items.iter().zip(sections.iter()) {
+        if !all && it.checked {
+            continue;
+        }
+        if Some(section.as_str()) != last {
+            if !section.is_empty() {
+                println!("## {}", section);
+            }
+            last = Some(section.as_str());
+        }
+        let id = it.id.as_deref().unwrap_or("-");
+        if all {
+            println!("{}\t[{}] {}", id, if it.checked { "x" } else { " " }, it.text);
+        } else {
+            println!("{}\t{}", id, it.text);
         }
     }
     Ok(())

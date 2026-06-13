@@ -29,6 +29,14 @@ enum Cmd {
         #[arg(long)]
         status: Option<String>,
     },
+    /// List the resolved task's unchecked items (id + text) for the skill
+    Todo {
+        /// Include checked items too, with their state
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        task: Option<String>,
+    },
     /// Open a task in $EDITOR (fuzzy picker without an argument)
     Open { task: Option<String> },
     /// Print the resolved task (resolution: --task > worktree > REIN_TASK > current)
@@ -142,6 +150,7 @@ fn run() -> Result<()> {
         Cmd::Init { .. } | Cmd::Ui => unreachable!(),
         Cmd::New { title, shared } => local::new(&ctx, &title, shared),
         Cmd::List { status } => local::list(&ctx, status.as_deref()),
+        Cmd::Todo { all, task } => local::todo(&ctx, task.as_deref(), all),
         Cmd::Open { task } => local::open(&ctx, task.as_deref()),
         Cmd::Current { path } => local::current(&ctx, path),
         Cmd::Use { task } => local::use_task(&ctx, &task),

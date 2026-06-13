@@ -3,11 +3,11 @@ description: Run the current LLM task document, implement unchecked tasks, updat
 disable-model-invocation: true
 ---
 
-Run `rein current --path` to find the active task document, then read it.
+Run `rein todo` to list the current task's unchecked items. Each line is `<id>` then the item text, grouped under its `## section`. Read the full document with `rein current --path` only when you need the Goal or Notes for context.
 
 Rules:
 
-1. Execute only unchecked tasks.
+1. Execute only the unchecked items `rein todo` prints.
 2. Never edit checkboxes or Agent Log in the Markdown directly. Use:
    - `rein check <item-id>` after a task is implemented and verified
    - `rein log "<text>"` to append a concise entry after each completed task

@@ -177,6 +177,23 @@ pub fn scan_items(body: &str) -> Vec<Item> {
     items
 }
 
+/// The `## ` section heading each checklist item falls under, indexed parallel
+/// to `scan_items` (same order, one entry per item). Empty for items before the
+/// first heading. Lets `rein todo` group items the way the document does.
+pub fn item_sections(body: &str) -> Vec<String> {
+    let mut current = String::new();
+    let mut out = Vec::new();
+    for line in body.lines() {
+        if let Some(rest) = line.strip_prefix("## ") {
+            current = rest.trim().to_string();
+        }
+        if checkbox_prefix(line).is_some() {
+            out.push(current.clone());
+        }
+    }
+    out
+}
+
 /// Assign stable, monotonic integer IDs to checklist items lacking one. A
 /// single sequence spans Tasks and Validation. Existing IDs (any form) are kept
 /// and never renumbered, so reordering, rewording, or inserting lines never
@@ -417,6 +434,21 @@ mod tests {
         assert!(changed);
         // "one" is non-numeric so the next item gets the first integer
         assert!(body.contains("- [ ] <!-- task:1 --> Second thing"));
+    }
+
+    #[test]
+    fn sections_align_with_items() {
+        let mut doc = sample(); // adds two items under ## Tasks
+        doc.body = doc.body.replace(
+            "## Validation\n",
+            "## Validation\n\n- [ ] <!-- task:v --> Tests pass\n",
+        );
+        let items = scan_items(&doc.body);
+        let sections = item_sections(&doc.body);
+        assert_eq!(items.len(), sections.len());
+        assert_eq!(sections[0], "Tasks");
+        assert_eq!(sections[1], "Tasks");
+        assert_eq!(sections[2], "Validation");
     }
 
     #[test]
