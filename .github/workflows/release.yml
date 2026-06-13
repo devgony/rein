@@ -1,0 +1,44 @@
+name: release
+
+# Publish to crates.io when a v* tag is pushed:
+#   cargo set-version 0.0.2 (or edit Cargo.toml) && git commit
+#   git tag v0.0.2 && git push origin v0.0.2
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write # required for crates.io Trusted Publishing (OIDC)
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # fail before publishing if anything is broken
+      - run: cargo test --locked
+
+      # the tag (v0.0.2) must match the version in Cargo.toml
+      - name: Verify tag matches Cargo.toml version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name=="reins") | .version')
+          echo "tag=$tag  Cargo.toml=$crate"
+          test "$tag" = "$crate"
+
+      # exchange GitHub's OIDC identity for a short-lived crates.io token —
+      # no long-lived CARGO_REGISTRY_TOKEN secret stored in the repo
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
