@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="images/rein-logo-1mb.png" alt="rein logo" width="160">
+</p>
+
 # rein
 
 LLM task journal + shared inbox manager.
