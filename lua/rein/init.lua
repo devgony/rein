@@ -12,11 +12,11 @@ local M = {}
 
 local config = {
   cmd = "rein ui", -- string (split on spaces) or an argv list
-  width = 0.9, -- <= 1: fraction of the editor; > 1: absolute columns
-  height = 0.9, -- <= 1: fraction of the editor; > 1: absolute rows
+  width = 0.95, -- <= 1: fraction of the editor; > 1: absolute columns
+  height = 0.95, -- <= 1: fraction of the editor; > 1: absolute rows
   border = "rounded", -- any nvim_open_win() border style
   title = " rein ",
-  keymap = "<leader>ru", -- normal-mode toggle; set to false to skip the mapping
+  keymap = "<M-r>", -- toggle in normal mode + close from inside the TUI; false to skip
 }
 
 local state = { buf = nil, win = nil, job = nil }
@@ -72,6 +72,16 @@ local function open()
   local fresh = not (state.buf and vim.api.nvim_buf_is_valid(state.buf))
   if fresh then
     state.buf = vim.api.nvim_create_buf(false, true)
+    -- the TUI grabs all input while focused (terminal mode), so the normal-mode
+    -- toggle can't fire from inside it; a buffer-local terminal-mode mapping on
+    -- the same key closes the float so the one key toggles both ways.
+    if config.keymap then
+      vim.keymap.set("t", config.keymap, M.toggle, {
+        buffer = state.buf,
+        desc = "Toggle rein UI",
+        silent = true,
+      })
+    end
   end
 
   state.win = vim.api.nvim_open_win(state.buf, true, {

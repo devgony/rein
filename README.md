@@ -118,8 +118,8 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim), add the spec:
 {
   "devgony/rein",
   cmd = "Rein",
-  keys = { { "<leader>ru", "<cmd>Rein<cr>", desc = "Toggle rein UI" } },
-  opts = { keymap = false }, -- the `keys` above already maps it
+  keys = { "<M-r>" },          -- lazy-load trigger; the plugin owns the mapping
+  opts = { keymap = "<M-r>" }, -- Alt-r toggles the float both ways
 }
 ```
 
@@ -130,8 +130,8 @@ return {
   {
     "devgony/rein",
     cmd = "Rein",
-    keys = { { "<leader>ru", "<cmd>Rein<cr>", desc = "Toggle rein UI" } },
-    opts = { keymap = false },
+    keys = { "<M-r>" },
+    opts = { keymap = "<M-r>" },
   },
 }
 ```
@@ -139,19 +139,19 @@ return {
 Hacking on rein itself? Point at the working tree instead of GitHub so edits apply on restart (no push, no `:Lazy update`) — swap `"devgony/rein"` for `dir`:
 
 ```lua
-{ dir = "/path/to/rein", name = "rein", cmd = "Rein", keys = { ... }, opts = { keymap = false } }
+{ dir = "/path/to/rein", name = "rein", cmd = "Rein", keys = { "<M-r>" }, opts = { keymap = "<M-r>" } }
 ```
 
-Usage: `:Rein` (or `<leader>ru`) opens the dashboard centered as a float; quit the TUI with `q` to close it, or toggle again to dismiss. Failed items show in red (struck through).
+Usage: `<M-r>` (or `:Rein`) opens the dashboard centered as a 95% × 95% float and **closes it again from inside the TUI** — one key, both ways. You can also quit the TUI with its own `q`. Failed items show in red (struck through). Set `keymap = false` to skip the built-in mapping and wire your own key to `:Rein` (give it `mode = { "n", "t" }` so it toggles out from terminal mode too).
 
 Options (`opts = { ... }`, defaults shown):
 
 | option | default | meaning |
 | --- | --- | --- |
 | `cmd` | `"rein ui"` | command to launch (string or argv list) |
-| `width` / `height` | `0.9` | `<= 1` fraction of the editor, `> 1` absolute cells |
+| `width` / `height` | `0.95` | `<= 1` fraction of the editor, `> 1` absolute cells |
 | `border` | `"rounded"` | any `nvim_open_win()` border style |
-| `keymap` | `"<leader>ru"` | built-in normal-mode toggle; `false` to skip (e.g. when mapping via lazy's `keys`) |
+| `keymap` | `"<M-r>"` | toggles in normal mode and closes from inside the TUI; `false` to skip |
 
 ## Command summary
 
