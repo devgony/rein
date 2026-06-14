@@ -1,16 +1,44 @@
+<h1 align="center">Rein</h1>
+
 <p align="center">
-  <img src="images/rein-logo.png" alt="rein logo" width="160">
+  <img src="images/rein-logo.png" alt="Rein logo" width="160">
 </p>
 
-# rein
+<p align="center">
+  <b>LLM task journal &amp; shared inbox manager</b>
+</p>
 
-LLM task journal + shared inbox manager.
+<p align="center">
+  <i>The reins of a harness</i> — steer an LLM with local Markdown task docs,<br>
+  safe CLI mutations it can't corrupt, and GitHub only when you need to share.
+</p>
 
-**rein** (as in the reins of a harness) is the interface for steering an LLM: it keeps the task documents you hand to an LLM as local Markdown, lets the LLM run and check them off safely, and connects to GitHub issues/PRs only when you need to share or review.
+<p align="center">
+  <a href="https://crates.io/crates/reins"><img alt="crates.io" src="https://img.shields.io/crates/v/reins?logo=rust&logoColor=white&label=crates.io&color=E37B40"></a>
+  <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
+  <a href="https://github.com/devgony/rein/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/devgony/rein?style=social"></a>
+</p>
 
-- The source of truth is the Markdown in a local store. GitHub is a publishing and review surface, not the truth.
-- State changes go through CLI mutation commands (`check`/`log`/`fail`), not direct Markdown edits — so the LLM can't corrupt the document.
-- See `PLAN.md` for the design rationale and decisions.
+---
+
+## Why rein?
+
+- 📝 **Markdown is the source of truth.** Task docs live in a local store; GitHub is a publishing and review surface, not the truth.
+- 🔒 **The LLM can't corrupt the doc.** State changes go through CLI mutation commands (`check` / `log` / `fail`), never direct Markdown edits.
+- 🌳 **Parallel-safe.** Each git worktree binds to its own task, so multi-agent runs never cross-talk.
+- 🔗 **GitHub when you want it.** Publish issues, attach PRs, and sync a marker-wrapped managed section — human text outside the markers is preserved.
+- 🖥️ **At a glance.** A cross-project TUI (`rein ui`) and a Neovim plugin to toggle it in a float.
+
+See [`PLAN.md`](PLAN.md) for the design rationale and decisions.
+
+## Contents
+
+- [Install](#install)
+- [Concepts](#concepts)
+- [Workflows](#workflows)
+- [TUI (`rein ui`)](#tui-rein-ui)
+- [Command summary](#command-summary)
+- [LLM integration (Claude skill)](#llm-integration-claude-skill)
 
 ## Install
 
