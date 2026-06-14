@@ -108,18 +108,50 @@ Failed items (resolved via `rein fail`) render in red and struck through in the 
 
 ### Neovim
 
-The repo doubles as a Neovim plugin that toggles `rein ui` in a floating terminal. With [lazy.nvim](https://github.com/folke/lazy.nvim):
+The repo doubles as a Neovim plugin that toggles `rein ui` in a floating terminal — install it like any other plugin.
+
+Prerequisites: the `rein` binary on `$PATH` (see [Install](#install)) and Neovim 0.10+.
+
+With [lazy.nvim](https://github.com/folke/lazy.nvim), add the spec:
 
 ```lua
 {
   "devgony/rein",
-  opts = {},                 -- calls require("rein").setup(opts)
   cmd = "Rein",
   keys = { { "<leader>ru", "<cmd>Rein<cr>", desc = "Toggle rein UI" } },
+  opts = { keymap = false }, -- the `keys` above already maps it
 }
 ```
 
-`:Rein` (or `<leader>ru`) opens the dashboard centered as a float; quit the TUI with `q` to close it, or toggle again to dismiss. Options (with defaults): `cmd = "rein ui"`, `width = 0.9`, `height = 0.9`, `border = "rounded"`, `keymap = "<leader>ru"` (set `false` to skip the mapping). Requires the `rein` binary on `$PATH` and Neovim 0.10+.
+On LazyVim, put that in its own file, `~/.config/nvim/lua/plugins/rein.lua`:
+
+```lua
+return {
+  {
+    "devgony/rein",
+    cmd = "Rein",
+    keys = { { "<leader>ru", "<cmd>Rein<cr>", desc = "Toggle rein UI" } },
+    opts = { keymap = false },
+  },
+}
+```
+
+Hacking on rein itself? Point at the working tree instead of GitHub so edits apply on restart (no push, no `:Lazy update`) — swap `"devgony/rein"` for `dir`:
+
+```lua
+{ dir = "/path/to/rein", name = "rein", cmd = "Rein", keys = { ... }, opts = { keymap = false } }
+```
+
+Usage: `:Rein` (or `<leader>ru`) opens the dashboard centered as a float; quit the TUI with `q` to close it, or toggle again to dismiss. Failed items show in red (struck through).
+
+Options (`opts = { ... }`, defaults shown):
+
+| option | default | meaning |
+| --- | --- | --- |
+| `cmd` | `"rein ui"` | command to launch (string or argv list) |
+| `width` / `height` | `0.9` | `<= 1` fraction of the editor, `> 1` absolute cells |
+| `border` | `"rounded"` | any `nvim_open_win()` border style |
+| `keymap` | `"<leader>ru"` | built-in normal-mode toggle; `false` to skip (e.g. when mapping via lazy's `keys`) |
 
 ## Command summary
 
