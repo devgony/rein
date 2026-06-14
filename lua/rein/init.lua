@@ -1,17 +1,31 @@
 -- rein.nvim — toggle the `rein` TUI in a floating terminal window.
 --
 -- Install with lazy.nvim:
---   { "devgony/rein", opts = {}, cmd = "Rein",
---     keys = { { "<leader>ru", "<cmd>Rein<cr>", desc = "Toggle rein UI" } } }
+--   { "devgony/rein", cmd = "Rein", keys = { "<M-r>" }, opts = { keymap = "<M-r>" } }
 --
--- `:Rein` (or the configured keymap) opens the dashboard in a centered float;
--- quitting the TUI (its own `q`) closes the window, and toggling again from
--- normal mode closes/reopens it.
+-- <M-r> (or :Rein) toggles the dashboard as a centered float — and the same key
+-- closes it from inside the TUI. Set opts.dev = true (or a repo path) to launch
+-- from source via `cargo run` while hacking on rein itself.
 
 local M = {}
+local unpack = unpack or table.unpack
 
+---@class rein.Config
+---@field cmd string|string[]
+---@field dev boolean|string
+---@field width number
+---@field height number
+---@field border string
+---@field title string
+---@field keymap string|false
 local config = {
   cmd = "rein ui", -- string (split on spaces) or an argv list
+  -- Dev mode: launch the TUI from source via `cargo run` instead of the
+  -- installed binary, so edits show up on the next toggle (incremental debug
+  -- build) without `cargo install`. `true` = auto-detect the repo from this
+  -- plugin's own location (ideal for a local `dir=` install); a string = path
+  -- to the rein repo; `false` = use `cmd` as-is.
+  dev = false,
   width = 0.95, -- <= 1: fraction of the editor; > 1: absolute columns
   height = 0.95, -- <= 1: fraction of the editor; > 1: absolute rows
   border = "rounded", -- any nvim_open_win() border style
@@ -21,11 +35,42 @@ local config = {
 
 local state = { buf = nil, win = nil, job = nil }
 
-local function argv()
-  if type(config.cmd) == "table" then
-    return config.cmd
+-- Repo root inferred from this file: <root>/lua/rein/init.lua -> <root>.
+local function plugin_root()
+  local src = debug.getinfo(1, "S").source:sub(2) -- strip the leading '@'
+  return vim.fn.fnamemodify(src, ":h:h:h")
+end
+
+local function dev_root()
+  local dev = config.dev
+  if dev == true then
+    return plugin_root()
+  elseif type(dev) == "string" and dev ~= "" then
+    return (dev:gsub("/+$", ""))
   end
-  return vim.split(config.cmd, " ", { trimempty = true })
+  return nil
+end
+
+-- The argv the toggle will spawn. In dev mode the binary is replaced by
+-- `cargo run --manifest-path <root>/Cargo.toml -- <subcommand…>`, reusing the
+-- subcommand args from `cmd` (e.g. `ui`). Exposed so you can `:lua =require("rein").command()`.
+function M.command()
+  local cmd = config.cmd
+  local base
+  if type(cmd) == "table" then
+    base = cmd
+  else
+    base = vim.split(cmd, " ", { trimempty = true })
+  end
+  local root = dev_root()
+  if root then
+    local sub = { unpack(base, 2) } -- drop the binary name, keep {"ui", …}
+    return vim.list_extend(
+      { "cargo", "run", "--quiet", "--manifest-path", root .. "/Cargo.toml", "--" },
+      sub
+    )
+  end
+  return base
 end
 
 local function dim(v, total)
@@ -57,10 +102,11 @@ local function on_exit()
 end
 
 local function start_terminal()
+  local cmd = M.command()
   if vim.fn.has("nvim-0.10") == 1 then
-    return vim.fn.jobstart(argv(), { term = true, on_exit = on_exit })
+    return vim.fn.jobstart(cmd, { term = true, on_exit = on_exit })
   end
-  return vim.fn.termopen(argv(), { on_exit = on_exit }) -- nvim < 0.10
+  return vim.fn.termopen(cmd, { on_exit = on_exit }) -- nvim < 0.10
 end
 
 local function open()
@@ -106,8 +152,9 @@ function M.toggle()
     M.close()
     return
   end
-  if vim.fn.executable(argv()[1]) == 0 then
-    vim.notify("rein: `" .. argv()[1] .. "` not found on $PATH", vim.log.levels.ERROR)
+  local exe = M.command()[1]
+  if vim.fn.executable(exe) == 0 then
+    vim.notify("rein: `" .. exe .. "` not found on $PATH", vim.log.levels.ERROR)
     return
   end
   open()

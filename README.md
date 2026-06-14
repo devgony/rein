@@ -136,11 +136,13 @@ return {
 }
 ```
 
-Hacking on rein itself? Point at the working tree instead of GitHub so edits apply on restart (no push, no `:Lazy update`) — swap `"devgony/rein"` for `dir`:
+Hacking on rein itself? Point at the working tree instead of GitHub, and set `dev = true` so each toggle launches the TUI from source via `cargo run` (a fast incremental debug build) — your edits show up on the next toggle with no `cargo install`:
 
 ```lua
-{ dir = "/path/to/rein", name = "rein", cmd = "Rein", keys = { "<M-r>" }, opts = { keymap = "<M-r>" } }
+{ dir = "/path/to/rein", name = "rein", cmd = "Rein", keys = { "<M-r>" }, opts = { keymap = "<M-r>", dev = true } }
 ```
+
+`dev = true` auto-detects the repo from the plugin's own location; pass a path (`dev = "/path/to/rein"`) to point elsewhere. `:lua =require("rein").command()` prints exactly what will run.
 
 Usage: `<M-r>` (or `:Rein`) opens the dashboard centered as a 95% × 95% float and **closes it again from inside the TUI** — one key, both ways. You can also quit the TUI with its own `q`. Failed items show in red (struck through). Set `keymap = false` to skip the built-in mapping and wire your own key to `:Rein` (give it `mode = { "n", "t" }` so it toggles out from terminal mode too).
 
@@ -149,6 +151,7 @@ Options (`opts = { ... }`, defaults shown):
 | option | default | meaning |
 | --- | --- | --- |
 | `cmd` | `"rein ui"` | command to launch (string or argv list) |
+| `dev` | `false` | `true` (auto-detect repo) or a repo path → run from source via `cargo run` instead of the installed binary |
 | `width` / `height` | `0.95` | `<= 1` fraction of the editor, `> 1` absolute cells |
 | `border` | `"rounded"` | any `nvim_open_win()` border style |
 | `keymap` | `"<M-r>"` | toggles in normal mode and closes from inside the TUI; `false` to skip |
