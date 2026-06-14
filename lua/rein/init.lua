@@ -84,21 +84,32 @@ function M.is_open()
   return state.win ~= nil and vim.api.nvim_win_is_valid(state.win)
 end
 
-function M.close()
-  if state.win and vim.api.nvim_win_is_valid(state.win) then
-    vim.api.nvim_win_close(state.win, true)
+-- Fully tear down the float + terminal. State is nilled first so the jobstart
+-- on_exit callback (which fires while we force-delete the terminal buffer) just
+-- re-enters as a no-op instead of double-closing.
+local function cleanup()
+  local win, buf = state.win, state.buf
+  state.win, state.buf, state.job = nil, nil, nil
+  if win and vim.api.nvim_win_is_valid(win) then
+    pcall(vim.api.nvim_win_close, win, true)
   end
-  state.win = nil
+  if buf and vim.api.nvim_buf_is_valid(buf) then
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+  end
 end
 
--- Called when the TUI process exits: tear the float and buffer down so the
--- next toggle starts a fresh session.
+-- Closing ends the session (kills the TUI + buffer). Each open then starts a
+-- fresh `rein ui`. Reusing a hidden terminal buffer instead made nvim reflow it
+-- on the next show, shaving the border's worth of leading columns off the left
+-- pane on every toggle; the dashboard is stateless, so a fresh start is free.
+function M.close()
+  cleanup()
+end
+
+-- Fires when the TUI exits on its own (its `q`); schedule so the buffer/window
+-- teardown runs outside the restricted on_exit context.
 local function on_exit()
-  M.close()
-  if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
-    vim.api.nvim_buf_delete(state.buf, { force = true })
-  end
-  state.buf, state.job = nil, nil
+  vim.schedule(cleanup)
 end
 
 local function start_terminal()
@@ -113,21 +124,16 @@ local function open()
   local cols, rows = vim.o.columns, vim.o.lines
   local w, h = dim(config.width, cols), dim(config.height, rows)
 
-  -- Reuse a still-running session's buffer (a hidden, alive TUI) so toggling
-  -- the window preserves state; otherwise start fresh.
-  local fresh = not (state.buf and vim.api.nvim_buf_is_valid(state.buf))
-  if fresh then
-    state.buf = vim.api.nvim_create_buf(false, true)
-    -- the TUI grabs all input while focused (terminal mode), so the normal-mode
-    -- toggle can't fire from inside it; a buffer-local terminal-mode mapping on
-    -- the same key closes the float so the one key toggles both ways.
-    if config.keymap then
-      vim.keymap.set("t", config.keymap, M.toggle, {
-        buffer = state.buf,
-        desc = "Toggle rein UI",
-        silent = true,
-      })
-    end
+  state.buf = vim.api.nvim_create_buf(false, true)
+  -- the TUI grabs all input while focused (terminal mode), so the normal-mode
+  -- toggle can't fire from inside it; a buffer-local terminal-mode mapping on
+  -- the same key closes the float so the one key toggles both ways.
+  if config.keymap then
+    vim.keymap.set("t", config.keymap, M.toggle, {
+      buffer = state.buf,
+      desc = "Toggle rein UI",
+      silent = true,
+    })
   end
 
   state.win = vim.api.nvim_open_win(state.buf, true, {
@@ -141,9 +147,7 @@ local function open()
     title = config.title,
   })
 
-  if fresh then
-    state.job = start_terminal()
-  end
+  state.job = start_terminal()
   vim.cmd("startinsert")
 end
 
