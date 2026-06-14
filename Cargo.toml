@@ -9,7 +9,7 @@ homepage = "https://github.com/devgony/rein"
 readme = "README.md"
 keywords = ["llm", "cli", "task", "agent", "github"]
 categories = ["command-line-utilities", "development-tools"]
-exclude = [".claude/", ".github/"]
+exclude = [".claude/", ".github/", "lua/", ".luarc.json"]
 
 # Package is `reins` (the singular `rein` is taken); the library and the
 # installed binary are both `rein` — `cargo install reins` yields `rein`.

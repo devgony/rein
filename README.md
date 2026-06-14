@@ -104,6 +104,23 @@ A single dashboard across all your projects. Launched inside a repo, it pre-scop
 
 Editing is always delegated to `$EDITOR` — there is no built-in Markdown editor in the TUI.
 
+Failed items (resolved via `rein fail`) render in red and struck through in the preview, distinct from green done and yellow open.
+
+### Neovim
+
+The repo doubles as a Neovim plugin that toggles `rein ui` in a floating terminal. With [lazy.nvim](https://github.com/folke/lazy.nvim):
+
+```lua
+{
+  "devgony/rein",
+  opts = {},                 -- calls require("rein").setup(opts)
+  cmd = "Rein",
+  keys = { { "<leader>ru", "<cmd>Rein<cr>", desc = "Toggle rein UI" } },
+}
+```
+
+`:Rein` (or `<leader>ru`) opens the dashboard centered as a float; quit the TUI with `q` to close it, or toggle again to dismiss. Options (with defaults): `cmd = "rein ui"`, `width = 0.9`, `height = 0.9`, `border = "rounded"`, `keymap = "<leader>ru"` (set `false` to skip the mapping). Requires the `rein` binary on `$PATH` and Neovim 0.10+.
+
 ## Command summary
 
 ```text
