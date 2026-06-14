@@ -333,9 +333,9 @@ fn failed_items_render_red_and_struck() {
     assert_eq!(failed.style.fg, Some(Color::Red));
     assert!(failed.style.add_modifier.contains(Modifier::CROSSED_OUT));
 
-    // a normal checked item stays green, an open item stays yellow
+    // a normal checked item is a deep green, an open item stays yellow
     let done = lines.iter().find(|l| text(l).contains("done")).unwrap();
-    assert_eq!(done.style.fg, Some(Color::Green));
+    assert_eq!(done.style.fg, Some(Color::Rgb(0, 128, 0)));
     let open = lines.iter().find(|l| text(l).contains("open")).unwrap();
     assert_eq!(open.style.fg, Some(Color::Yellow));
 }

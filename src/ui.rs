@@ -554,7 +554,9 @@ pub fn render_markdown(body: &str) -> Vec<Line<'static>> {
                     .add_modifier(Modifier::CROSSED_OUT),
             ));
         } else if line.trim_start().starts_with("- [x]") || line.trim_start().starts_with("- [X]") {
-            out.push(Line::styled(line, Style::default().fg(Color::Green)));
+            // completed item: a deep, theme-independent green so it stands clearly
+            // apart from the yellow open-item color (ANSI green reads olive on some themes)
+            out.push(Line::styled(line, Style::default().fg(Color::Rgb(0, 128, 0))));
         } else if line.trim_start().starts_with("- [ ]") {
             out.push(Line::styled(line, Style::default().fg(Color::Yellow)));
         } else {
