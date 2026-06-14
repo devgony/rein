@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="images/rein-logo-1mb.png" alt="rein logo" width="160">
+  <img src="images/rein-logo.png" alt="rein logo" width="160">
 </p>
 
 # rein
@@ -92,19 +92,19 @@ Only the managed section between the `rein:begin`/`rein:end` markers is updated 
 
 A single dashboard across all your projects. Launched inside a repo, it pre-scopes to that project; press `P` to pick another.
 
-| key | action |
-| --- | --- |
-| `j`/`k` | move |
-| `Tab` | cycle status (all/inbox/active/done/canceled) |
-| `P` | pick project (project > task hierarchy) |
-| `Enter` | edit in `$EDITOR` |
-| `n` | new task |
-| `s` | start (inbox → active) |
-| `m` | move to any state (i/a/d/c) |
-| `d` | done |
-| `p` | publish issue or push |
-| `/` | filter (matches project name too) |
-| `q` | quit |
+| key     | action                                        |
+| ------- | --------------------------------------------- |
+| `j`/`k` | move                                          |
+| `Tab`   | cycle status (all/inbox/active/done/canceled) |
+| `P`     | pick project (project > task hierarchy)       |
+| `Enter` | edit in `$EDITOR`                             |
+| `n`     | new task                                      |
+| `s`     | start (inbox → active)                        |
+| `m`     | move to any state (i/a/d/c)                   |
+| `d`     | done                                          |
+| `p`     | publish issue or push                         |
+| `/`     | filter (matches project name too)             |
+| `q`     | quit                                          |
 
 Editing is always delegated to `$EDITOR` — there is no built-in Markdown editor in the TUI.
 
@@ -152,13 +152,13 @@ Usage: `<M-r>` (or `:Rein`) opens the dashboard centered as a 95% × 95% float a
 
 Options (`opts = { ... }`, defaults shown):
 
-| option | default | meaning |
-| --- | --- | --- |
-| `cmd` | `"rein ui"` | command to launch (string or argv list) |
-| `dev` | `false` | `true` (auto-detect repo) or a repo path → run from source via `cargo run` instead of the installed binary |
-| `width` / `height` | `0.95` | `<= 1` fraction of the editor, `> 1` absolute cells |
-| `border` | `"rounded"` | any `nvim_open_win()` border style |
-| `keymap` | `"<M-r>"` | toggles in normal mode and closes from inside the TUI; `false` to skip |
+| option             | default     | meaning                                                                                                    |
+| ------------------ | ----------- | ---------------------------------------------------------------------------------------------------------- |
+| `cmd`              | `"rein ui"` | command to launch (string or argv list)                                                                    |
+| `dev`              | `false`     | `true` (auto-detect repo) or a repo path → run from source via `cargo run` instead of the installed binary |
+| `width` / `height` | `0.95`      | `<= 1` fraction of the editor, `> 1` absolute cells                                                        |
+| `border`           | `"rounded"` | any `nvim_open_win()` border style                                                                         |
+| `keymap`           | `"<M-r>"`   | toggles in normal mode and closes from inside the TUI; `false` to skip                                     |
 
 ## Command summary
 
