@@ -317,3 +317,25 @@ fn project_picker_navigates_and_scopes() {
     assert!(!app.picking_project);
     assert_eq!(app.project_scope.as_deref(), Some("tools"));
 }
+
+#[test]
+fn failed_items_render_red_and_struck() {
+    use ratatui::style::{Color, Modifier};
+    use rein::ui::render_markdown;
+
+    let body = "## Tasks\n\n- [ ] <!-- task:1 --> open\n- [x] <!-- task:2 --> done\n- [x] <!-- task:3 --> <!-- failed --> ~~nope~~ \u{274c}";
+    let lines = render_markdown(body);
+    let text = |l: &ratatui::text::Line| -> String {
+        l.spans.iter().map(|s| s.content.as_ref()).collect()
+    };
+
+    let failed = lines.iter().find(|l| text(l).contains("nope")).unwrap();
+    assert_eq!(failed.style.fg, Some(Color::Red));
+    assert!(failed.style.add_modifier.contains(Modifier::CROSSED_OUT));
+
+    // a normal checked item stays green, an open item stays yellow
+    let done = lines.iter().find(|l| text(l).contains("done")).unwrap();
+    assert_eq!(done.style.fg, Some(Color::Green));
+    let open = lines.iter().find(|l| text(l).contains("open")).unwrap();
+    assert_eq!(open.style.fg, Some(Color::Yellow));
+}

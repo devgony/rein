@@ -544,6 +544,15 @@ pub fn render_markdown(body: &str) -> Vec<Line<'static>> {
                 line,
                 Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
             ));
+        } else if line.contains(crate::task::FAILED_SENTINEL) {
+            // resolved-failed item: red + struck through (it carries a checked
+            // box, so this branch must precede the `- [x]` one below)
+            out.push(Line::styled(
+                line,
+                Style::default()
+                    .fg(Color::Red)
+                    .add_modifier(Modifier::CROSSED_OUT),
+            ));
         } else if line.trim_start().starts_with("- [x]") || line.trim_start().starts_with("- [X]") {
             out.push(Line::styled(line, Style::default().fg(Color::Green)));
         } else if line.trim_start().starts_with("- [ ]") {
