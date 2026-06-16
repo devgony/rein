@@ -19,6 +19,7 @@ fn rows_in(project: &str) -> Vec<TaskRow> {
         path: PathBuf::from(format!("/store/{}/{}.md", status.as_str(), slug)),
         body: body.to_string(),
         has_issue: false,
+        has_pr: false,
         project: project.clone(),
         store_root: PathBuf::from("/store"),
     };
@@ -44,6 +45,7 @@ fn rows_multi() -> Vec<TaskRow> {
         path: PathBuf::from(format!("/store/{}/{}/{}.md", project, status.as_str(), slug)),
         body: format!("## Goal\n\n{}", slug),
         has_issue: false,
+        has_pr: false,
         project: project.to_string(),
         store_root: PathBuf::from(format!("/store/{}", project)),
     };
@@ -238,6 +240,58 @@ fn m_moves_selected_task_to_any_state() {
 }
 
 #[test]
+fn r_opens_pr_with_worktree_or_branch_mode() {
+    // r on an inbox task opens the worktree/branch picker; w → worktree-backed PR
+    let mut app = App::new(rows());
+    assert_eq!(key(&mut app, KeyCode::Char('r')), UiAction::None);
+    assert!(app.pring);
+    let screen = draw(&app);
+    assert!(screen.contains("PR for settings-cleanup:"));
+    let action = key(&mut app, KeyCode::Char('w'));
+    assert_eq!(
+        action,
+        UiAction::CreatePr("task-20260613-settings-cleanup".into(), true)
+    );
+    assert!(!app.pring);
+
+    // r then b → main-repo branch PR
+    let mut app = App::new(rows());
+    key(&mut app, KeyCode::Char('r'));
+    let action = key(&mut app, KeyCode::Char('b'));
+    assert_eq!(
+        action,
+        UiAction::CreatePr("task-20260613-settings-cleanup".into(), false)
+    );
+
+    // any other key cancels the picker
+    let mut app = App::new(rows());
+    key(&mut app, KeyCode::Char('r'));
+    assert_eq!(key(&mut app, KeyCode::Char('x')), UiAction::None);
+    assert!(!app.pring);
+}
+
+#[test]
+fn r_refuses_pr_when_attached_or_finished() {
+    // a task that already has a PR
+    let mut with_pr = rows();
+    with_pr[0].has_pr = true;
+    let mut app = App::new(with_pr);
+    assert_eq!(key(&mut app, KeyCode::Char('r')), UiAction::None);
+    assert!(!app.pring);
+    assert!(app.message.contains("already has a PR"));
+
+    // a done task can't open a PR
+    let mut app = App::new(rows());
+    for _ in 0..2 {
+        key(&mut app, KeyCode::Char('j'));
+    }
+    assert_eq!(app.selected_task().unwrap().slug, "old-thing");
+    assert_eq!(key(&mut app, KeyCode::Char('r')), UiAction::None);
+    assert!(!app.pring);
+    assert!(app.message.contains("inbox/active"));
+}
+
+#[test]
 fn project_label_renders_and_filters() {
     let mut app = App::new(rows_in("acme/web"));
     let screen = draw(&app);
@@ -260,6 +314,7 @@ fn keybinding_hint_advertises_new_and_move() {
     assert!(screen.contains("n new"));
     assert!(screen.contains("m move"));
     assert!(screen.contains("P project"));
+    assert!(screen.contains("r PR"));
 }
 
 #[test]

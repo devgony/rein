@@ -28,6 +28,7 @@ pub struct TaskRow {
     pub path: PathBuf,
     pub body: String,
     pub has_issue: bool,
+    pub has_pr: bool,
     pub project: String,
     pub store_root: PathBuf,
 }
@@ -42,6 +43,7 @@ impl TaskRow {
             path: t.path.clone(),
             body: t.doc.body.clone(),
             has_issue: t.doc.front.github_issue.is_some(),
+            has_pr: t.doc.front.github_pr.is_some(),
             project: project.to_string(),
             store_root: store_root.to_path_buf(),
         }
@@ -58,7 +60,8 @@ pub enum UiAction {
     Start(String),
     Move(String, Status), // free-form transition to any state
     Done(String),
-    Publish(String), // issue if none attached, else push
+    Publish(String),        // issue if none attached, else push
+    CreatePr(String, bool), // open a draft PR; bool = worktree (vs main-repo branch)
 }
 
 const TABS: [Option<Status>; 5] = [
@@ -77,6 +80,8 @@ pub struct App {
     pub filtering: bool,
     pub creating: bool,
     pub moving: bool,
+    /// True while awaiting the PR-mode key (`w` worktree / `b` branch).
+    pub pring: bool,
     pub input: String,
     pub message: String,
     /// Active project filter: `None` shows every project, `Some(name)` scopes
@@ -105,6 +110,7 @@ impl App {
             filtering: false,
             creating: false,
             moving: false,
+            pring: false,
             input: String::new(),
             message: String::new(),
             project_scope: None,
@@ -244,6 +250,22 @@ impl App {
             }
             return UiAction::None;
         }
+        // pick how to back the PR: a worktree (under the store) or a main-repo
+        // branch; any other key cancels
+        if self.pring {
+            self.pring = false;
+            let worktree = match key.code {
+                KeyCode::Char('w') => Some(true),
+                KeyCode::Char('b') => Some(false),
+                _ => None,
+            };
+            if let Some(worktree) = worktree {
+                if let Some(t) = self.selected_task() {
+                    return UiAction::CreatePr(t.id.clone(), worktree);
+                }
+            }
+            return UiAction::None;
+        }
         // hierarchical project level: pick which project scopes the task list
         if self.picking_project {
             let len = self.project_list().len() + 1; // +1 for "all projects"
@@ -362,6 +384,12 @@ impl App {
                     return UiAction::Publish(t.id.clone());
                 }
             }
+            KeyCode::Char('r') => match self.selected_task() {
+                Some(t) if t.has_pr => self.message = "already has a PR".into(),
+                Some(t) if matches!(t.status, Status::Inbox | Status::Active) => self.pring = true,
+                Some(_) => self.message = "only inbox/active tasks can open a PR".into(),
+                None => self.message = "no task selected".into(),
+            },
             _ => {}
         }
         UiAction::None
@@ -503,6 +531,12 @@ impl App {
                 "move {} to: [i]nbox [a]ctive [d]one [c]anceled · Esc cancel",
                 slug
             )
+        } else if self.pring {
+            let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
+            format!(
+                "PR for {}: [w]orktree [b]ranch · any other key cancels",
+                slug
+            )
         } else if self.picking_project {
             "j/k move · Enter select project · Esc cancel".to_string()
         } else if self.filtering {
@@ -510,7 +544,7 @@ impl App {
         } else if !self.message.is_empty() {
             self.message.clone()
         } else {
-            "j/k move · Tab status · P project · Enter edit · n new · s start · m move · d done · p issue/push · / filter · q quit"
+            "j/k move · Tab status · P project · Enter edit · n new · s start · m move · d done · r PR · p issue/push · / filter · q quit"
                 .to_string()
         };
         f.render_widget(Paragraph::new(text).style(Style::default().fg(Color::DarkGray)), area);
@@ -755,6 +789,14 @@ fn event_loop(
                             crate::commands::sync_cmd::issue(&ctx, &task.slug)
                         }
                     }),
+                    None => Err(anyhow!("task '{}' vanished", id)),
+                };
+                finish(app, projects, r);
+            }
+            UiAction::CreatePr(id, worktree) => {
+                let r = match find_task(projects, &id) {
+                    Some((info, task)) => ctx_for(info)
+                        .and_then(|ctx| crate::commands::exec::create_pr(&ctx, Some(&task.slug), worktree)),
                     None => Err(anyhow!("task '{}' vanished", id)),
                 };
                 finish(app, projects, r);

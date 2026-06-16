@@ -42,17 +42,7 @@ pub fn start(
         .unwrap_or_else(|| format!("rein/{}", task.slug));
 
     if worktree {
-        let wt_path = worktree_path(&ctx.repo, &task.slug);
-        ctx.repo
-            .worktree_add(&wt_path, &branch_name)
-            .context("git worktree add failed")?;
-        // bind task to the new worktree via its git-dir pointer
-        let wt_repo = Repo::discover(&wt_path)?;
-        wt_repo.write_task_pointer(&task.id)?;
-        st.branch = Some(branch_name.clone());
-        st.worktree = Some(wt_path.to_string_lossy().to_string());
-        set_branch_frontmatter(ctx, &task, &branch_name)?;
-        println!("worktree: {}", wt_path.display());
+        setup_worktree(ctx, &task, &branch_name, &mut st)?;
     } else {
         if branch.is_some() {
             ctx.repo.branch_create_and_switch(&branch_name)?;
@@ -67,19 +57,9 @@ pub fn start(
         if !worktree && branch.is_none() {
             bail!("--draft-pr requires --worktree or --branch");
         }
-        let gh = Gh::in_dir(&ctx.repo.workdir);
-        let task = ctx.store.find_by_id(&task.id).context("task missing")?;
-        let body = task::pr_projection(&task.doc);
-        let number = gh.pr_create_draft(&task.doc.front.title, &body, &branch_name)?;
-        let mut doc = task.doc.clone();
-        doc.front.github_pr = Some(number);
-        doc.touch();
-        ctx.store.write_doc(&task.path, &doc)?;
-        st.pr_synced_hash = Some(crate::sync::hash_block(&body));
+        let fresh = ctx.store.find_by_id(&task.id).context("task missing")?;
+        let number = create_draft_pr(ctx, &fresh, &branch_name, &mut st)?;
         println!("draft PR: #{}", number);
-        if let Some(issue) = doc.front.github_issue {
-            let _ = gh.issue_comment(issue, &format!("Started in PR #{}", number));
-        }
     } else if let Some(issue) = task.doc.front.github_issue {
         let gh = Gh::in_dir(&ctx.repo.workdir);
         let _ = gh.issue_comment(issue, &format!("Started on branch `{}`", branch_name));
@@ -90,18 +70,105 @@ pub fn start(
     Ok(())
 }
 
-fn worktree_path(repo: &Repo, slug: &str) -> PathBuf {
-    let name = repo
-        .workdir
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "repo".to_string());
-    let parent = repo
-        .workdir
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| repo.workdir.clone());
-    parent.join(format!("{}-wt", name)).join(slug)
+/// Open a draft PR for a task, from the dashboard or `rein pr`. Inbox tasks are
+/// claimed and set up exactly like `start` (worktree or main-repo branch per
+/// `worktree`); active tasks reuse their bound branch, or get one set up if they
+/// have none. Refuses if a PR is already attached.
+pub fn create_pr(ctx: &Ctx, query: Option<&str>, worktree: bool) -> Result<()> {
+    let task = match query {
+        Some(q) => ctx.store.find(q)?,
+        None => resolve::resolve_task(ctx, None)?.0,
+    };
+    if let Some(pr) = task.doc.front.github_pr {
+        bail!("'{}' already has PR #{}", task.slug, pr);
+    }
+    // inbox → delegate to start, which claims + sets up + opens the PR in one go
+    if task.status == Status::Inbox {
+        let branch = (!worktree).then(|| format!("rein/{}", task.slug));
+        return start(ctx, &task.slug, worktree, branch.as_deref(), true);
+    }
+    if task.status != Status::Active {
+        bail!(
+            "'{}' is {} — only inbox/active tasks can open a PR",
+            task.slug,
+            task.status.as_str()
+        );
+    }
+    // active: reuse the bound branch, else set one up per the chosen mode
+    let mut st = state::load(&ctx.store, &task.id);
+    let branch_name = task
+        .doc
+        .front
+        .branch
+        .clone()
+        .or_else(|| st.branch.clone())
+        .unwrap_or_else(|| format!("rein/{}", task.slug));
+    if st.branch.is_none() {
+        if worktree {
+            setup_worktree(ctx, &task, &branch_name, &mut st)?;
+        } else {
+            ctx.repo.branch_create_and_switch(&branch_name)?;
+            st.branch = Some(branch_name.clone());
+            set_branch_frontmatter(ctx, &task, &branch_name)?;
+        }
+    }
+    let fresh = ctx.store.find_by_id(&task.id).context("task missing")?;
+    let number = create_draft_pr(ctx, &fresh, &branch_name, &mut st)?;
+    state::save(&ctx.store, &task.id, &st)?;
+    println!("draft PR: #{}", number);
+    Ok(())
+}
+
+/// Worktrees live under the rein store (`<store>/worktrees/<slug>`) rather than
+/// beside the repo, so the project's parent dir stays clean and cleanup happens
+/// from a path the engine owns. `done`/`cancel` remove via the stored
+/// `st.worktree`, so this location is free to change without touching them.
+fn worktree_path(store: &Store, slug: &str) -> PathBuf {
+    store.root.join("worktrees").join(slug)
+}
+
+/// Add a worktree for `task` on `branch_name`, bind the task↔worktree pointer,
+/// and record the branch/worktree in `st`. Shared by `start` and `create_pr`.
+fn setup_worktree(
+    ctx: &Ctx,
+    task: &TaskRef,
+    branch_name: &str,
+    st: &mut state::TaskState,
+) -> Result<()> {
+    let wt_path = worktree_path(&ctx.store, &task.slug);
+    ctx.repo
+        .worktree_add(&wt_path, branch_name)
+        .context("git worktree add failed")?;
+    // bind task to the new worktree via its git-dir pointer
+    let wt_repo = Repo::discover(&wt_path)?;
+    wt_repo.write_task_pointer(&task.id)?;
+    st.branch = Some(branch_name.to_string());
+    st.worktree = Some(wt_path.to_string_lossy().to_string());
+    set_branch_frontmatter(ctx, task, branch_name)?;
+    println!("worktree: {}", wt_path.display());
+    Ok(())
+}
+
+/// Create the draft PR on `branch_name`, record `github_pr` in the doc, seed the
+/// PR sync hash in `st`, and ping the linked issue. Shared by `start`/`create_pr`.
+fn create_draft_pr(
+    ctx: &Ctx,
+    task: &TaskRef,
+    branch_name: &str,
+    st: &mut state::TaskState,
+) -> Result<u64> {
+    let gh = Gh::in_dir(&ctx.repo.workdir);
+    let body = task::pr_projection(&task.doc);
+    let number = gh.pr_create_draft(&task.doc.front.title, &body, branch_name)?;
+    let mut doc = task.doc.clone();
+    doc.front.github_pr = Some(number);
+    doc.touch();
+    ctx.store.write_doc(&task.path, &doc)?;
+    st.pr_synced_hash = Some(crate::sync::hash_block(&body));
+    if let Some(issue) = doc.front.github_issue {
+        let _ = gh.issue_comment(issue, &format!("Started in PR #{}", number));
+    }
+    Ok(number)
 }
 
 fn set_branch_frontmatter(ctx: &Ctx, task: &TaskRef, branch: &str) -> Result<()> {

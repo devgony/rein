@@ -361,7 +361,7 @@ task마다 파일 하나로 분리한다. 이유는 병렬 실행이다(아래 "
   "version": 1,
   "path": "active/settings-cleanup.md",
   "branch": "rein/settings-cleanup",
-  "worktree": "/Users/hyx/Rust/rein-wt/settings-cleanup",
+  "worktree": "<store>/worktrees/settings-cleanup",
   "issue_synced_hash": "sha256:...",
   "pr_synced_hash": "sha256:..."
 }

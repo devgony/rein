@@ -63,6 +63,13 @@ enum Cmd {
         #[arg(long = "draft-pr")]
         draft_pr: bool,
     },
+    /// Open a draft PR for a task (worktree under the store, or a main-repo branch)
+    Pr {
+        task: Option<String>,
+        /// Set up an isolated worktree (under the store) instead of a main-repo branch
+        #[arg(long)]
+        worktree: bool,
+    },
     /// Check an item (LLM-safe mutation)
     Check {
         item_id: String,
@@ -167,6 +174,7 @@ fn run() -> Result<()> {
             branch,
             draft_pr,
         } => exec::start(&ctx, &task, worktree, branch.as_deref(), draft_pr),
+        Cmd::Pr { task, worktree } => exec::create_pr(&ctx, task.as_deref(), worktree),
         Cmd::Check { item_id, task } => exec::check(&ctx, &item_id, task.as_deref(), true),
         Cmd::Uncheck { item_id, task } => exec::check(&ctx, &item_id, task.as_deref(), false),
         Cmd::Log { text, task } => exec::log(&ctx, &text, task.as_deref()),

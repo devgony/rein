@@ -346,7 +346,7 @@ fn start_worktree_binds_task_by_cwd() {
         .stdout(predicate::str::contains("worktree:"));
 
     let id1 = task_id(&env, "active", "feat-one");
-    let wt = env._tmp.path().join("proj-wt/feat-one");
+    let wt = store_root(&env).join("worktrees/feat-one");
     assert!(wt.is_dir(), "worktree not created");
 
     // pointer file in the worktree's git-dir holds the task id
@@ -684,7 +684,7 @@ fn use_rebinds_worktree_pointer() {
         .args(["start", "one", "--worktree"])
         .assert()
         .success();
-    let wt = env._tmp.path().join("proj-wt/one");
+    let wt = store_root(&env).join("worktrees/one");
     let id_two = task_id(&env, "inbox", "two");
 
     // inside a bound worktree, `use` rewrites the pointer, not the current file
@@ -705,7 +705,7 @@ fn done_preflight_and_worktree_cleanup() {
         .args(["start", "dirty-job", "--worktree"])
         .assert()
         .success();
-    let wt = env._tmp.path().join("proj-wt/dirty-job");
+    let wt = store_root(&env).join("worktrees/dirty-job");
 
     // dirty worktree → pre-flight refuses, nothing moved
     fs::write(wt.join("junk.txt"), "wip").unwrap();
@@ -748,7 +748,7 @@ fn done_keep_worktree() {
         .args(["start", "keepwt", "--worktree"])
         .assert()
         .success();
-    let wt = env._tmp.path().join("proj-wt/keepwt");
+    let wt = store_root(&env).join("worktrees/keepwt");
     fs::write(wt.join("junk.txt"), "wip").unwrap();
     rein(&env, &env.repo)
         .args(["done", "keepwt", "--keep-worktree"])
@@ -768,7 +768,7 @@ fn cancel_force_discards_dirty_worktree() {
         .args(["start", "byebye", "--worktree"])
         .assert()
         .success();
-    let wt = env._tmp.path().join("proj-wt/byebye");
+    let wt = store_root(&env).join("worktrees/byebye");
     fs::write(wt.join("junk.txt"), "wip").unwrap();
 
     rein(&env, &env.repo)
@@ -1190,6 +1190,74 @@ fn start_draft_pr_records_number() {
 }
 
 #[test]
+fn pr_worktree_on_inbox_opens_under_store() {
+    let env = setup();
+    init(&env);
+    let gh = fake_gh(&env);
+    rein(&env, &env.repo).args(["new", "feat"]).assert().success();
+    let mut c = rein(&env, &env.repo);
+    gh.apply(&mut c);
+    c.args(["pr", "feat", "--worktree"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("draft PR: #7"));
+    // worktree lives under the rein store, not beside the repo
+    assert!(store_root(&env).join("worktrees/feat").is_dir(), "worktree not under store");
+    assert!(!env._tmp.path().join("proj-wt/feat").exists(), "should not litter parent dir");
+    // inbox → active with the PR recorded
+    assert!(read(&store_root(&env).join("active/feat.md")).contains("github_pr: 7"));
+    assert!(gh.log_text().contains("pr create --draft"));
+    // a second PR is refused
+    let mut c2 = rein(&env, &env.repo);
+    gh.apply(&mut c2);
+    c2.args(["pr", "feat"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already has PR #7"));
+}
+
+#[test]
+fn pr_branch_mode_on_inbox_uses_main_repo_branch() {
+    let env = setup();
+    init(&env);
+    let gh = fake_gh(&env);
+    rein(&env, &env.repo).args(["new", "alpha"]).assert().success();
+    let mut c = rein(&env, &env.repo);
+    gh.apply(&mut c);
+    c.args(["pr", "alpha"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("draft PR: #7"));
+    // no worktree; branch created and checked out in the main repo
+    assert!(!store_root(&env).join("worktrees/alpha").exists());
+    let branch = git(&env.home, &env.repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    assert_eq!(branch, "rein/alpha");
+    assert!(read(&store_root(&env).join("active/alpha.md")).contains("github_pr: 7"));
+}
+
+#[test]
+fn pr_on_active_task_reuses_existing_branch() {
+    let env = setup();
+    init(&env);
+    let gh = fake_gh(&env);
+    rein(&env, &env.repo).args(["new", "beta"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["start", "beta", "--worktree"])
+        .assert()
+        .success();
+    // already active, no PR yet → opens one on the existing worktree branch
+    let mut c = rein(&env, &env.repo);
+    gh.apply(&mut c);
+    c.args(["pr", "beta"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("draft PR: #7"));
+    assert!(read(&store_root(&env).join("active/beta.md")).contains("github_pr: 7"));
+    assert!(store_root(&env).join("worktrees/beta").is_dir());
+    assert!(gh.log_text().contains("pr create --draft"));
+}
+
+#[test]
 fn done_closes_issue_and_updates_pr() {
     let env = setup();
     init(&env);
@@ -1260,8 +1328,8 @@ fn parallel_worktrees_full_workflow() {
             .assert()
             .success();
     }
-    let wt_a = env._tmp.path().join("proj-wt/job-a");
-    let wt_b = env._tmp.path().join("proj-wt/job-b");
+    let wt_a = store_root(&env).join("worktrees/job-a");
+    let wt_b = store_root(&env).join("worktrees/job-b");
 
     // each worker mutates "its" task by cwd alone — same item id, no cross-talk
     rein(&env, &wt_a).args(["check", "work"]).assert().success();

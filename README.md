@@ -92,15 +92,16 @@ You don't have to add `<!-- task:... -->` IDs by hand — the tool assigns them 
 ### B. Parallel worktrees (Claude Code multi-agent)
 
 ```sh
-rein start feat-a --worktree  # creates ../proj-wt/feat-a + branch rein/feat-a
+rein start feat-a --worktree  # creates a worktree + branch rein/feat-a (prints its path)
 rein start feat-b --worktree
 ```
 
-Each worktree is bound to its own task, so an agent just runs commands from its own cwd:
+Worktrees live under the store (`<store>/worktrees/<slug>`), not beside the repo, so the project's parent dir stays clean and `done`/`cancel` remove them from a path the engine owns. `start` prints the worktree path (`worktree: …`). Each worktree is bound to its own task, so an agent just runs commands from its own cwd:
 
 ```sh
-cd ../proj-wt/feat-a && rein current   # → feat-a (resolved from cwd)
-cd ../proj-wt/feat-b && rein check x   # → edits only feat-b, no cross-talk
+cd <printed worktree path>   # e.g. ~/.local/share/rein/<key>/worktrees/feat-a
+rein current                 # → feat-a (resolved from cwd)
+rein check x                 # → edits only feat-a, no cross-talk
 ```
 
 Clean up explicitly from the parent session (`rein done feat-a` / `rein cancel feat-b --force`). Running a mutation without a task in the main repo is blocked by a guard when two or more tasks are active — pass `--task` or run it from the right worktree.
@@ -114,7 +115,9 @@ rein pull                     # apply remote issue-body changes
 rein push                     # push local changes into the issue/PR managed section
 ```
 
-Only the managed section between the `rein:begin`/`rein:end` markers is updated on the remote body; human text outside the markers is preserved. Conflicts are detected by a 3-way hash, backed up under `conflicts/`, and force-pushed with `rein push --resolved` after you resolve them. Attach a PR with `rein start … --draft-pr` or `rein attach-pr <n>`, then update it with `rein push` (the Agent Log folds into a `<details>`).
+Only the managed section between the `rein:begin`/`rein:end` markers is updated on the remote body; human text outside the markers is preserved. Conflicts are detected by a 3-way hash, backed up under `conflicts/`, and force-pushed with `rein push --resolved` after you resolve them.
+
+Open a draft PR with `rein pr [task] [--worktree]` (worktree-backed, else a main-repo branch), or fold it into the claim with `rein start … --draft-pr`, or attach an existing one with `rein attach-pr <n>`; then update it with `rein push` (the Agent Log folds into a `<details>`). In the TUI, `r` opens the same PR flow (pick `w` worktree / `b` branch).
 
 ## TUI (`rein ui`)
 
@@ -130,6 +133,7 @@ A single dashboard across all your projects. Launched inside a repo, it pre-scop
 | `s`     | start (inbox → active)                        |
 | `m`     | move to any state (i/a/d/c)                   |
 | `d`     | done                                          |
+| `r`     | open a draft PR (then `w` worktree / `b` branch) |
 | `p`     | publish issue or push                         |
 | `/`     | filter (matches project name too)             |
 | `q`     | quit                                          |
@@ -200,6 +204,7 @@ rein current [--path]                print the resolved task (read-only)
 rein use <task>                      switch the task binding (worktree pointer / current file)
 rein move <task> <status>            move to any state (plain relocation, no side effects)
 rein start <task> [--worktree] [--branch <b>] [--draft-pr]
+rein pr [task] [--worktree]           open a draft PR (worktree under the store, else a main-repo branch)
 rein check / uncheck <item-id> [--task <id>]
 rein log <text> [--task <id>]
 rein fail <item-id> --reason <text> [--task <id>]   resolve as failed (checked + struck through, drops from todo)
