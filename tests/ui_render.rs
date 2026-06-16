@@ -292,6 +292,23 @@ fn r_refuses_pr_when_attached_or_finished() {
 }
 
 #[test]
+fn error_popup_shows_and_swallows_next_key() {
+    let mut app = App::new(rows());
+    app.popup = Some("branch 'rein/fix' already exists — git branch -D rein/fix".into());
+    let screen = draw(&app);
+    assert!(screen.contains("error — press any key to dismiss"));
+    assert!(screen.contains("already exists"));
+    // any key dismisses the popup and is otherwise consumed (no action)
+    assert_eq!(key(&mut app, KeyCode::Char('j')), UiAction::None);
+    assert!(app.popup.is_none());
+
+    // while open, the popup intercepts even quit
+    app.popup = Some("boom".into());
+    assert_eq!(key(&mut app, KeyCode::Char('q')), UiAction::None);
+    assert!(app.popup.is_none());
+}
+
+#[test]
 fn project_label_renders_and_filters() {
     let mut app = App::new(rows_in("acme/web"));
     let screen = draw(&app);

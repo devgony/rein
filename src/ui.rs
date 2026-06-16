@@ -11,7 +11,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -84,6 +84,8 @@ pub struct App {
     pub pring: bool,
     pub input: String,
     pub message: String,
+    /// A modal error overlay; `Some` blocks input until dismissed with any key.
+    pub popup: Option<String>,
     /// Active project filter: `None` shows every project, `Some(name)` scopes
     /// the task list to one. Pre-set to the launch repo's project so `rein ui`
     /// lands in the current project's tasks.
@@ -113,6 +115,7 @@ impl App {
             pring: false,
             input: String::new(),
             message: String::new(),
+            popup: None,
             project_scope: None,
             all_projects: Vec::new(),
             picking_project: false,
@@ -202,6 +205,11 @@ impl App {
 
     pub fn on_key(&mut self, key: KeyEvent) -> UiAction {
         if key.kind != KeyEventKind::Press {
+            return UiAction::None;
+        }
+        // a modal error overlay swallows the next key (any key dismisses it)
+        if self.popup.is_some() {
+            self.popup = None;
             return UiAction::None;
         }
         // text entry for a new task title
@@ -407,6 +415,25 @@ impl App {
         self.render_list(f, panes[0]);
         self.render_preview(f, panes[1]);
         self.render_statusline(f, outer[1]);
+        if let Some(msg) = &self.popup {
+            self.render_popup(f, msg);
+        }
+    }
+
+    /// A centered modal over the dashboard for predictable failures (e.g. a
+    /// branch that already exists), dismissed with any key.
+    fn render_popup(&self, f: &mut Frame, msg: &str) {
+        let area = centered_rect(60, 40, f.area());
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Red))
+            .title(" error — press any key to dismiss ");
+        let para = Paragraph::new(msg.to_string())
+            .wrap(Wrap { trim: true })
+            .style(Style::default().fg(Color::Red))
+            .block(block);
+        f.render_widget(Clear, area);
+        f.render_widget(para, area);
     }
 
     fn render_list(&self, f: &mut Frame, area: Rect) {
@@ -549,6 +576,26 @@ impl App {
         };
         f.render_widget(Paragraph::new(text).style(Style::default().fg(Color::DarkGray)), area);
     }
+}
+
+/// A `Rect` centered in `area`, sized to the given percentage of width/height.
+fn centered_rect(pct_x: u16, pct_y: u16, area: Rect) -> Rect {
+    let vert = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - pct_y) / 2),
+            Constraint::Percentage(pct_y),
+            Constraint::Percentage((100 - pct_y) / 2),
+        ])
+        .split(area);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - pct_x) / 2),
+            Constraint::Percentage(pct_x),
+            Constraint::Percentage((100 - pct_x) / 2),
+        ])
+        .split(vert[1])[1]
 }
 
 fn status_color(s: Status) -> Color {
@@ -745,7 +792,7 @@ fn event_loop(
                                 app.tasks = load_all_rows(projects);
                                 select_path(app, &path);
                             }
-                            Err(e) => app.message = format!("error: {:#}", e),
+                            Err(e) => app.popup = Some(format!("{:#}", e)),
                         }
                     }
                     None => {
@@ -823,9 +870,9 @@ fn select_path(app: &mut App, path: &Path) {
 fn finish(app: &mut App, projects: &[StoreInfo], result: Result<()>) {
     match result {
         Ok(()) => app.message = "ok".to_string(),
-        // `{:#}` flattens the whole anyhow chain onto the status line, so the
-        // underlying cause (e.g. git's stderr) is visible, not just the top context
-        Err(e) => app.message = format!("error: {:#}", e),
+        // surface failures as a modal popup, not a clipped status line — `{:#}`
+        // flattens the whole anyhow chain so the cause (e.g. git's stderr) shows
+        Err(e) => app.popup = Some(format!("{:#}", e)),
     }
     app.tasks = load_all_rows(projects);
 }

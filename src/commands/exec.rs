@@ -45,9 +45,7 @@ pub fn start(
         setup_worktree(ctx, &task, &branch_name, &mut st)?;
     } else {
         if branch.is_some() {
-            ctx.repo.branch_create_and_switch(&branch_name)?;
-            st.branch = Some(branch_name.clone());
-            set_branch_frontmatter(ctx, &task, &branch_name)?;
+            setup_branch(ctx, &task, &branch_name, &mut st)?;
         }
         // single mode: current pointer
         ctx.store.write_current(&task.id)?;
@@ -107,9 +105,7 @@ pub fn create_pr(ctx: &Ctx, query: Option<&str>, worktree: bool) -> Result<()> {
         if worktree {
             setup_worktree(ctx, &task, &branch_name, &mut st)?;
         } else {
-            ctx.repo.branch_create_and_switch(&branch_name)?;
-            st.branch = Some(branch_name.clone());
-            set_branch_frontmatter(ctx, &task, &branch_name)?;
+            setup_branch(ctx, &task, &branch_name, &mut st)?;
         }
     }
     let fresh = ctx.store.find_by_id(&task.id).context("task missing")?;
@@ -135,6 +131,7 @@ fn setup_worktree(
     branch_name: &str,
     st: &mut state::TaskState,
 ) -> Result<()> {
+    ensure_branch_free(ctx, branch_name)?;
     let wt_path = worktree_path(&ctx.store, &task.slug);
     ctx.repo
         .worktree_add(&wt_path, branch_name)
@@ -146,6 +143,34 @@ fn setup_worktree(
     st.worktree = Some(wt_path.to_string_lossy().to_string());
     set_branch_frontmatter(ctx, task, branch_name)?;
     println!("worktree: {}", wt_path.display());
+    Ok(())
+}
+
+/// Create `branch_name` in the main repo, switch to it, and record it in `st`.
+/// Shared by `start` and `create_pr` (single/branch mode).
+fn setup_branch(
+    ctx: &Ctx,
+    task: &TaskRef,
+    branch_name: &str,
+    st: &mut state::TaskState,
+) -> Result<()> {
+    ensure_branch_free(ctx, branch_name)?;
+    ctx.repo.branch_create_and_switch(branch_name)?;
+    st.branch = Some(branch_name.to_string());
+    set_branch_frontmatter(ctx, task, branch_name)?;
+    Ok(())
+}
+
+/// Turn the predictable "branch already exists" collision (usually a leftover
+/// from an earlier run for the same task) into an actionable message, before
+/// `git worktree add -b` / `git switch -c` fails with a bare git fatal.
+fn ensure_branch_free(ctx: &Ctx, branch_name: &str) -> Result<()> {
+    if ctx.repo.branch_exists(branch_name) {
+        bail!(
+            "branch '{branch_name}' already exists — likely left by an earlier run. \
+             Delete it with `git branch -D {branch_name}` (or finish/cancel that task), then retry."
+        );
+    }
     Ok(())
 }
 

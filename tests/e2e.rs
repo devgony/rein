@@ -1258,6 +1258,23 @@ fn pr_on_active_task_reuses_existing_branch() {
 }
 
 #[test]
+fn pr_reports_actionable_error_when_branch_exists() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "dup"]).assert().success();
+    // a leftover branch from an earlier run collides with rein/<slug>
+    git(&env.home, &env.repo, &["branch", "rein/dup"]);
+    rein(&env, &env.repo)
+        .args(["pr", "dup", "--worktree"])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("branch 'rein/dup' already exists")
+                .and(predicate::str::contains("git branch -D rein/dup")),
+        );
+}
+
+#[test]
 fn done_closes_issue_and_updates_pr() {
     let env = setup();
     init(&env);

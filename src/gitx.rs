@@ -98,6 +98,16 @@ impl Repo {
         git_in(&self.workdir, &["switch", "-c", branch]).map(|_| ())
     }
 
+    /// Whether a local branch already exists — used to turn the predictable
+    /// `git worktree add -b`/`switch -c` collision into an actionable message.
+    pub fn branch_exists(&self, branch: &str) -> bool {
+        git_in(
+            &self.workdir,
+            &["show-ref", "--verify", "--quiet", &format!("refs/heads/{}", branch)],
+        )
+        .is_ok()
+    }
+
     /// Path of the per-worktree task pointer file (truth of task↔worktree binding).
     pub fn task_pointer(&self) -> PathBuf {
         self.git_dir.join("rein-task")
