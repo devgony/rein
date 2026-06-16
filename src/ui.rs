@@ -745,7 +745,7 @@ fn event_loop(
                                 app.tasks = load_all_rows(projects);
                                 select_path(app, &path);
                             }
-                            Err(e) => app.message = format!("error: {}", e),
+                            Err(e) => app.message = format!("error: {:#}", e),
                         }
                     }
                     None => {
@@ -823,7 +823,9 @@ fn select_path(app: &mut App, path: &Path) {
 fn finish(app: &mut App, projects: &[StoreInfo], result: Result<()>) {
     match result {
         Ok(()) => app.message = "ok".to_string(),
-        Err(e) => app.message = format!("error: {}", e),
+        // `{:#}` flattens the whole anyhow chain onto the status line, so the
+        // underlying cause (e.g. git's stderr) is visible, not just the top context
+        Err(e) => app.message = format!("error: {:#}", e),
     }
     app.tasks = load_all_rows(projects);
 }
