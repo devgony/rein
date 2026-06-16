@@ -130,7 +130,7 @@ A single dashboard across all your projects. Launched inside a repo, it pre-scop
 | `P`     | pick project (project > task hierarchy)       |
 | `Enter` | edit in `$EDITOR`                             |
 | `n`     | new task                                      |
-| `s`     | start (inbox → active)                        |
+| `s`     | start (inbox → active) → `s` single / `w` worktree / `b` branch |
 | `m`     | move to any state (i/a/d/c)                   |
 | `d`     | done                                          |
 | `r`     | open a draft PR (then `w` worktree / `b` branch) |

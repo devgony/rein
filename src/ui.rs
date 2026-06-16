@@ -56,12 +56,21 @@ pub enum UiAction {
     None,
     Quit,
     Edit(PathBuf),
-    New(String),          // create an inbox task with this title
-    Start(String),
-    Move(String, Status), // free-form transition to any state
+    New(String),             // create an inbox task with this title
+    Start(String, StartMode), // claim inbox → active in the chosen mode
+    Move(String, Status),    // free-form transition to any state
     Done(String),
     Publish(String),        // issue if none attached, else push
     CreatePr(String, bool), // open a draft PR; bool = worktree (vs main-repo branch)
+}
+
+/// How `s` claims a task: plain single mode, an isolated worktree, or a
+/// main-repo branch — the dashboard counterpart of `rein start [--worktree|--branch]`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum StartMode {
+    Single,
+    Worktree,
+    Branch,
 }
 
 const TABS: [Option<Status>; 5] = [
@@ -80,6 +89,8 @@ pub struct App {
     pub filtering: bool,
     pub creating: bool,
     pub moving: bool,
+    /// True while awaiting the start-mode key (`s` single / `w` worktree / `b` branch).
+    pub starting: bool,
     /// True while awaiting the PR-mode key (`w` worktree / `b` branch).
     pub pring: bool,
     pub input: String,
@@ -112,6 +123,7 @@ impl App {
             filtering: false,
             creating: false,
             moving: false,
+            starting: false,
             pring: false,
             input: String::new(),
             message: String::new(),
@@ -258,6 +270,22 @@ impl App {
             }
             return UiAction::None;
         }
+        // pick how to claim the task: single / worktree / branch; any other key cancels
+        if self.starting {
+            self.starting = false;
+            let mode = match key.code {
+                KeyCode::Char('s') => Some(StartMode::Single),
+                KeyCode::Char('w') => Some(StartMode::Worktree),
+                KeyCode::Char('b') => Some(StartMode::Branch),
+                _ => None,
+            };
+            if let Some(mode) = mode {
+                if let Some(t) = self.selected_task() {
+                    return UiAction::Start(t.id.clone(), mode);
+                }
+            }
+            return UiAction::None;
+        }
         // pick how to back the PR: a worktree (under the store) or a main-repo
         // branch; any other key cancels
         if self.pring {
@@ -371,14 +399,13 @@ impl App {
                     self.message = "no task selected".into();
                 }
             }
-            KeyCode::Char('s') => {
-                if let Some(t) = self.selected_task() {
-                    if t.status == Status::Inbox {
-                        return UiAction::Start(t.id.clone());
-                    }
-                    self.message = "only inbox tasks can be started (use m to move)".into();
+            KeyCode::Char('s') => match self.selected_task() {
+                Some(t) if t.status == Status::Inbox => self.starting = true,
+                Some(_) => {
+                    self.message = "only inbox tasks can be started (use m to move)".into()
                 }
-            }
+                None => {}
+            },
             KeyCode::Char('d') => {
                 if let Some(t) = self.selected_task() {
                     if matches!(t.status, Status::Inbox | Status::Active) {
@@ -556,6 +583,12 @@ impl App {
             let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
             format!(
                 "move {} to: [i]nbox [a]ctive [d]one [c]anceled · Esc cancel",
+                slug
+            )
+        } else if self.starting {
+            let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
+            format!(
+                "start {}: [s]ingle [w]orktree [b]ranch · any other key cancels",
                 slug
             )
         } else if self.pring {
@@ -801,10 +834,20 @@ fn event_loop(
                     }
                 }
             }
-            UiAction::Start(id) => {
+            UiAction::Start(id, mode) => {
                 let r = match find_task(projects, &id) {
-                    Some((info, _)) => ctx_for(info)
-                        .and_then(|ctx| crate::commands::exec::start(&ctx, &id, false, None, false)),
+                    Some((info, task)) => ctx_for(info).and_then(|ctx| match mode {
+                        StartMode::Single => {
+                            crate::commands::exec::start(&ctx, &task.slug, false, None, false)
+                        }
+                        StartMode::Worktree => {
+                            crate::commands::exec::start(&ctx, &task.slug, true, None, false)
+                        }
+                        StartMode::Branch => {
+                            let b = format!("rein/{}", task.slug);
+                            crate::commands::exec::start(&ctx, &task.slug, false, Some(&b), false)
+                        }
+                    }),
                     None => Err(anyhow!("task '{}' vanished", id)),
                 };
                 finish(app, projects, r);

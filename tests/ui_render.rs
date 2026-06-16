@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use rein::store::Status;
-use rein::ui::{App, TaskRow, UiAction};
+use rein::ui::{App, StartMode, TaskRow, UiAction};
 use std::path::PathBuf;
 
 fn rows() -> Vec<TaskRow> {
@@ -154,13 +154,20 @@ fn keys_dispatch_to_cli_verbs() {
         action,
         UiAction::Edit(PathBuf::from("/store/inbox/settings-cleanup.md"))
     );
-    // s on an inbox task starts it
-    let action = key(&mut app, KeyCode::Char('s'));
-    assert_eq!(action, UiAction::Start("task-20260613-settings-cleanup".into()));
-    // s on an active task is refused with a message
+    // s on an inbox task opens the start-mode picker; w starts in a worktree
+    assert_eq!(key(&mut app, KeyCode::Char('s')), UiAction::None);
+    assert!(app.starting);
+    let action = key(&mut app, KeyCode::Char('w'));
+    assert_eq!(
+        action,
+        UiAction::Start("task-20260613-settings-cleanup".into(), StartMode::Worktree)
+    );
+    assert!(!app.starting);
+    // s on an active task is refused with a message (no picker)
     key(&mut app, KeyCode::Char('j'));
     let action = key(&mut app, KeyCode::Char('s'));
     assert_eq!(action, UiAction::None);
+    assert!(!app.starting);
     assert!(app.message.contains("inbox"));
     // d finishes, p publishes/pushes
     let action = key(&mut app, KeyCode::Char('d'));
@@ -237,6 +244,34 @@ fn m_moves_selected_task_to_any_state() {
     key(&mut app, KeyCode::Char('m'));
     assert_eq!(key(&mut app, KeyCode::Char('z')), UiAction::None);
     assert!(!app.moving);
+}
+
+#[test]
+fn s_opens_start_mode_picker() {
+    // s on the inbox task opens the picker; each key maps to a start mode
+    let cases = [
+        (KeyCode::Char('s'), StartMode::Single),
+        (KeyCode::Char('w'), StartMode::Worktree),
+        (KeyCode::Char('b'), StartMode::Branch),
+    ];
+    for (k, mode) in cases {
+        let mut app = App::new(rows());
+        assert_eq!(key(&mut app, KeyCode::Char('s')), UiAction::None);
+        assert!(app.starting);
+        let screen = draw(&app);
+        assert!(screen.contains("start settings-cleanup:"));
+        assert_eq!(
+            key(&mut app, k),
+            UiAction::Start("task-20260613-settings-cleanup".into(), mode)
+        );
+        assert!(!app.starting);
+    }
+
+    // any other key cancels the picker
+    let mut app = App::new(rows());
+    key(&mut app, KeyCode::Char('s'));
+    assert_eq!(key(&mut app, KeyCode::Char('x')), UiAction::None);
+    assert!(!app.starting);
 }
 
 #[test]
