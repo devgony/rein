@@ -1370,38 +1370,27 @@ fn run_installs_skill_at_user_level_without_touching_repo() {
 }
 
 #[test]
-fn run_records_session_and_logs_finds_transcript() {
+fn run_captures_bg_session_id_for_logs() {
     let env = setup();
     init(&env);
     rein(&env, &env.repo).args(["new", "job"]).assert().success();
     rein(&env, &env.repo).args(["start", "job", "--worktree"]).assert().success();
-    // fake agent: write a transcript named after the session id rein passes
-    let fake = "mkdir -p \"$HOME/.claude/projects/p\" && echo '{}' > \"$HOME/.claude/projects/p/$REIN_SESSION.jsonl\"";
+    // fake agent prints what `claude --bg` prints; rein parses the session id out
     rein(&env, &env.repo)
-        .env("REIN_RUN_CMD", fake)
+        .env("REIN_RUN_CMD", "printf 'backgrounded abcd1234 rein:job\\n'")
         .args(["run", "job"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("session").and(predicate::str::contains("rein logs job")));
+        .stdout(predicate::str::contains("backgrounded").and(predicate::str::contains("abcd1234")));
     let id = task_id(&env, "active", "job");
     let state = read(&store_root(&env).join("state").join(format!("{}.json", id)));
-    assert!(state.contains("run_session"), "session not recorded: {}", state);
-    // the agent is backgrounded → wait for the transcript to land
-    let projdir = env.home.join(".claude/projects/p");
-    let mut waited = 0;
-    while waited < 5000 && std::fs::read_dir(&projdir).map(|d| d.count() == 0).unwrap_or(true) {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        waited += 50;
-    }
-    // `rein logs` finds it by session id, regardless of the per-cwd dir name
+    assert!(state.contains("abcd1234"), "session id not recorded: {}", state);
+    // `rein logs` surfaces the id + Claude Code's own viewers
     rein(&env, &env.repo)
         .args(["logs", "job"])
         .assert()
         .success()
-        .stdout(
-            predicate::str::contains(".jsonl")
-                .and(predicate::str::contains("resume: claude --resume")),
-        );
+        .stdout(predicate::str::contains("claude attach abcd1234"));
 }
 
 #[test]

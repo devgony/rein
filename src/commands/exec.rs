@@ -8,12 +8,14 @@ use crate::util;
 use crate::Ctx;
 use anyhow::{anyhow, bail, Context, Result};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
-/// Default agent command for `rein run`. Launched via `sh -c`, so it can read the
+/// Default agent command for `rein run`. `claude --bg` dispatches a tracked
+/// background session (visible in `claude agents`, attach with `claude attach
+/// <id>`) and returns immediately. Launched via `sh -c`, so it can read the
 /// `REIN_*` env vars rein exports; override with `REIN_RUN_CMD` or git `rein.run`.
 const DEFAULT_RUN_CMD: &str =
-    "claude --dangerously-skip-permissions --session-id $REIN_SESSION --name rein:$REIN_SLUG -p /run-rein-task";
+    "claude --bg --dangerously-skip-permissions --name rein:$REIN_SLUG /run-rein-task";
 
 /// inbox→active claim + optional worktree/branch/draft-PR.
 pub fn start(
@@ -256,42 +258,42 @@ pub fn run(ctx: &Ctx, query: Option<&str>) -> Result<()> {
         println!("installed run-rein-task skill at {}", p.display());
     }
 
-    // a known session id lets us point back at the agent's transcript (the default
-    // command passes it via --session-id; custom commands can use $REIN_SESSION too)
-    let session = uuid::Uuid::new_v4().to_string();
-
-    // `nohup … &` detaches the agent; null stdio keeps it off the TUI terminal
-    Command::new("sh")
+    // run the command and surface its output; `claude --bg` returns at once after
+    // dispatching the session and prints `backgrounded · <id> · <name>` + hints
+    let out = Command::new("sh")
         .arg("-c")
-        .arg(format!("nohup {} &", cmd))
+        .arg(&cmd)
         .current_dir(&dir)
         .env("REIN_TASK", &task.id)
         .env("REIN_SLUG", &task.slug)
         .env("REIN_BRANCH", &branch)
         .env("REIN_DIR", &dir)
-        .env("REIN_SESSION", &session)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("failed to launch run command")?
-        .wait()
-        .ok();
-
-    st.run_session = Some(session.clone());
-    state::save(&ctx.store, &task.id, &st)?;
+        .output()
+        .context("failed to launch run command")?;
+    let reported = strip_ansi(&format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    ));
 
     println!("running {} in {}", task.id, dir.display());
     if worktree.is_none() {
         println!("note: no worktree — running in the main repo (edits are not isolated)");
     }
-    println!("session {} — `rein logs {}` to view", session, task.slug);
+    print!("{}", reported);
+    if !reported.ends_with('\n') {
+        println!();
+    }
+    // capture the daemon-assigned session id so `rein logs` can point back at it
+    if let Some(id) = parse_session_id(&reported) {
+        st.run_session = Some(id);
+        state::save(&ctx.store, &task.id, &st)?;
+    }
     Ok(())
 }
 
-/// Locate and report the transcript of a task's most recent `rein run`. Claude
-/// Code names each transcript `<session-id>.jsonl` under a per-cwd dir in its
-/// config (`projects/`), so we find it by session id regardless of the dir name.
+/// Point at the background session of a task's most recent `rein run`, using
+/// Claude Code's own viewers (it tracks the session, transcript, and liveness).
 pub fn logs(ctx: &Ctx, query: Option<&str>) -> Result<()> {
     let task = match query {
         Some(q) => ctx.store.find(q)?,
@@ -300,27 +302,40 @@ pub fn logs(ctx: &Ctx, query: Option<&str>) -> Result<()> {
     let session = state::load(&ctx.store, &task.id)
         .run_session
         .with_context(|| format!("no run recorded for '{}' — run `rein run` first", task.slug))?;
-
-    match find_transcript(&session) {
-        Some(path) => {
-            println!("{}", path.display());
-            println!("resume: claude --resume {}", session);
-        }
-        None => {
-            println!("session {} — no transcript yet (the agent may still be starting)", session);
-            println!("resume: claude --resume {}", session);
-        }
-    }
+    println!("session {}", session);
+    println!("  claude attach {}   # watch live / resume", session);
+    println!("  claude logs {}     # recent output", session);
+    println!("  claude agents        # all background sessions");
     Ok(())
 }
 
-/// Find `<session>.jsonl` under any per-cwd dir in Claude Code's `projects/`.
-fn find_transcript(session: &str) -> Option<PathBuf> {
-    let projects = crate::commands::local::claude_config_dir()?.join("projects");
-    std::fs::read_dir(projects).ok()?.flatten().find_map(|e| {
-        let p = e.path().join(format!("{}.jsonl", session));
-        p.exists().then_some(p)
-    })
+/// Pull the short session id out of `claude --bg`'s `backgrounded · <id> · …`
+/// line (the first 8-hex token), so `rein logs` can reference it later.
+fn parse_session_id(s: &str) -> Option<String> {
+    s.split(|c: char| !c.is_ascii_alphanumeric())
+        .find(|t| t.len() == 8 && t.chars().all(|c| c.is_ascii_hexdigit()))
+        .map(str::to_string)
+}
+
+/// Strip ANSI CSI escape sequences so captured agent output is safe to print and
+/// parse. Operates on bytes (the escapes are ASCII; multibyte chars are copied verbatim).
+fn strip_ansi(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == 0x1b && i + 1 < b.len() && b[i + 1] == b'[' {
+            i += 2;
+            while i < b.len() && !b[i].is_ascii_alphabetic() {
+                i += 1;
+            }
+            i += 1; // consume the terminating letter
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 // ---------------------------------------------------------------------------
