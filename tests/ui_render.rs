@@ -18,8 +18,13 @@ fn rows_in(project: &str) -> Vec<TaskRow> {
         status,
         path: PathBuf::from(format!("/store/{}/{}.md", status.as_str(), slug)),
         body: body.to_string(),
-        has_issue: false,
-        has_pr: false,
+        branch: None,
+        github_issue: None,
+        github_pr: None,
+        created_at: String::new(),
+        updated_at: String::new(),
+        tags: Vec::new(),
+        shared: false,
         project: project.clone(),
         store_root: PathBuf::from("/store"),
     };
@@ -44,8 +49,13 @@ fn rows_multi() -> Vec<TaskRow> {
         status,
         path: PathBuf::from(format!("/store/{}/{}/{}.md", project, status.as_str(), slug)),
         body: format!("## Goal\n\n{}", slug),
-        has_issue: false,
-        has_pr: false,
+        branch: None,
+        github_issue: None,
+        github_pr: None,
+        created_at: String::new(),
+        updated_at: String::new(),
+        tags: Vec::new(),
+        shared: false,
         project: project.to_string(),
         store_root: PathBuf::from(format!("/store/{}", project)),
     };
@@ -309,7 +319,7 @@ fn r_opens_pr_with_worktree_or_branch_mode() {
 fn r_refuses_pr_when_attached_or_finished() {
     // a task that already has a PR
     let mut with_pr = rows();
-    with_pr[0].has_pr = true;
+    with_pr[0].github_pr = Some(7);
     let mut app = App::new(with_pr);
     assert_eq!(key(&mut app, KeyCode::Char('r')), UiAction::None);
     assert!(!app.pring);
@@ -341,6 +351,25 @@ fn error_popup_shows_and_swallows_next_key() {
     app.popup = Some("boom".into());
     assert_eq!(key(&mut app, KeyCode::Char('q')), UiAction::None);
     assert!(app.popup.is_none());
+}
+
+#[test]
+fn meta_pane_shows_frontmatter() {
+    let mut row = rows();
+    row[0].branch = Some("rein/settings-cleanup".into());
+    row[0].github_issue = Some(41);
+    row[0].github_pr = Some(7);
+    row[0].tags = vec!["ui".into(), "cleanup".into()];
+    row[0].created_at = "2026-06-13T10:00:00+09:00".into();
+    row[0].updated_at = "2026-06-14T12:00:00+09:00".into();
+    let app = App::new(row); // selection defaults to the first task
+    let screen = draw(&app);
+    assert!(screen.contains("meta"));
+    assert!(screen.contains("rein/settings-cleanup"));
+    assert!(screen.contains("#41"));
+    assert!(screen.contains("#7"));
+    assert!(screen.contains("ui, cleanup"));
+    assert!(screen.contains("2026-06-13")); // created date, trimmed to the day
 }
 
 #[test]

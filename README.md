@@ -121,7 +121,7 @@ Open a draft PR with `rein pr [task] [--worktree]` (worktree-backed, else a main
 
 ## TUI (`rein ui`)
 
-A single dashboard across all your projects. Launched inside a repo, it pre-scopes to that project; press `P` to pick another.
+A single dashboard across all your projects. Launched inside a repo, it pre-scopes to that project; press `P` to pick another. The right column shows a small **meta** pane — id, branch, issue/PR numbers, created/updated dates, tags — above the Markdown preview of the selected task.
 
 | key     | action                                        |
 | ------- | --------------------------------------------- |

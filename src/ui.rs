@@ -27,8 +27,13 @@ pub struct TaskRow {
     pub status: Status,
     pub path: PathBuf,
     pub body: String,
-    pub has_issue: bool,
-    pub has_pr: bool,
+    pub branch: Option<String>,
+    pub github_issue: Option<u64>,
+    pub github_pr: Option<u64>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub tags: Vec<String>,
+    pub shared: bool,
     pub project: String,
     pub store_root: PathBuf,
 }
@@ -42,8 +47,13 @@ impl TaskRow {
             status: t.status,
             path: t.path.clone(),
             body: t.doc.body.clone(),
-            has_issue: t.doc.front.github_issue.is_some(),
-            has_pr: t.doc.front.github_pr.is_some(),
+            branch: t.doc.front.branch.clone(),
+            github_issue: t.doc.front.github_issue,
+            github_pr: t.doc.front.github_pr,
+            created_at: t.doc.front.created_at.clone(),
+            updated_at: t.doc.front.updated_at.clone(),
+            tags: t.doc.front.tags.clone(),
+            shared: t.doc.front.shared,
             project: project.to_string(),
             store_root: store_root.to_path_buf(),
         }
@@ -420,7 +430,7 @@ impl App {
                 }
             }
             KeyCode::Char('r') => match self.selected_task() {
-                Some(t) if t.has_pr => self.message = "already has a PR".into(),
+                Some(t) if t.github_pr.is_some() => self.message = "already has a PR".into(),
                 Some(t) if matches!(t.status, Status::Inbox | Status::Active) => self.pring = true,
                 Some(_) => self.message = "only inbox/active tasks can open a PR".into(),
                 None => self.message = "no task selected".into(),
@@ -439,12 +449,29 @@ impl App {
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
             .split(outer[0]);
+        // right column: a small meta pane above the markdown preview
+        let right = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(6), Constraint::Min(3)])
+            .split(panes[1]);
         self.render_list(f, panes[0]);
-        self.render_preview(f, panes[1]);
+        self.render_meta(f, right[0]);
+        self.render_preview(f, right[1]);
         self.render_statusline(f, outer[1]);
         if let Some(msg) = &self.popup {
             self.render_popup(f, msg);
         }
+    }
+
+    /// A compact pane above the preview showing the selected task's frontmatter
+    /// (id, branch, issue/PR numbers, timestamps, tags) — data the body doesn't show.
+    fn render_meta(&self, f: &mut Frame, area: Rect) {
+        let block = Block::default().borders(Borders::ALL).title(" meta ");
+        let lines = match self.selected_task() {
+            Some(t) => meta_lines(t),
+            None => vec![Line::from("—")],
+        };
+        f.render_widget(Paragraph::new(lines).block(block), area);
     }
 
     /// A centered modal over the dashboard for predictable failures (e.g. a
@@ -609,6 +636,41 @@ impl App {
         };
         f.render_widget(Paragraph::new(text).style(Style::default().fg(Color::DarkGray)), area);
     }
+}
+
+/// Render the selected task's frontmatter as four compact lines for the meta pane.
+fn meta_lines(t: &TaskRow) -> Vec<Line<'static>> {
+    let dim = Style::default().fg(Color::DarkGray);
+    let dash = || "—".to_string();
+    let date = |s: &str| s.get(..10).unwrap_or(s).to_string();
+    let issue = t.github_issue.map(|n| format!("#{}", n)).unwrap_or_else(dash);
+    let pr = t.github_pr.map(|n| format!("#{}", n)).unwrap_or_else(dash);
+    let tags = if t.tags.is_empty() { dash() } else { t.tags.join(", ") };
+    vec![
+        Line::from(Span::styled(
+            t.id.clone(),
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(vec![
+            Span::styled("branch: ", dim),
+            Span::raw(t.branch.clone().unwrap_or_else(dash)),
+        ]),
+        Line::from(vec![
+            Span::styled("issue: ", dim),
+            Span::raw(issue),
+            Span::styled("   PR: ", dim),
+            Span::raw(pr),
+            Span::raw(if t.shared { "   shared" } else { "" }.to_string()),
+        ]),
+        Line::from(vec![
+            Span::styled("created ", dim),
+            Span::raw(date(&t.created_at)),
+            Span::styled("  updated ", dim),
+            Span::raw(date(&t.updated_at)),
+            Span::styled("  tags: ", dim),
+            Span::raw(tags),
+        ]),
+    ]
 }
 
 /// A `Rect` centered in `area`, sized to the given percentage of width/height.
