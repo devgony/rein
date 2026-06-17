@@ -34,6 +34,9 @@ pub struct TaskRow {
     pub updated_at: String,
     pub tags: Vec<String>,
     pub shared: bool,
+    /// State of the last `rein run`'s background session (`working`/`done`/…),
+    /// resolved from `claude agents`; `None` if no run or the session is unknown.
+    pub run_state: Option<String>,
     pub project: String,
     pub store_root: PathBuf,
 }
@@ -54,6 +57,7 @@ impl TaskRow {
             updated_at: t.doc.front.updated_at.clone(),
             tags: t.doc.front.tags.clone(),
             shared: t.doc.front.shared,
+            run_state: None,
             project: project.to_string(),
             store_root: store_root.to_path_buf(),
         }
@@ -440,7 +444,15 @@ impl App {
             },
             KeyCode::Char('r') => match self.selected_task() {
                 Some(t) if t.github_pr.is_some() => self.message = "already has a PR".into(),
-                Some(t) if matches!(t.status, Status::Inbox | Status::Active) => self.pring = true,
+                Some(t) if matches!(t.status, Status::Inbox | Status::Active) => {
+                    // a task already backed by a worktree/branch reuses it, so the
+                    // w/b choice would be ignored — skip the prompt and open the PR.
+                    // only ask when there's nothing set up yet (fresh inbox/active).
+                    if t.branch.is_some() {
+                        return UiAction::CreatePr(t.id.clone(), false);
+                    }
+                    self.pring = true;
+                }
                 Some(_) => self.message = "only inbox/active tasks can open a PR".into(),
                 None => self.message = "no task selected".into(),
             },
@@ -582,6 +594,10 @@ impl App {
                     ));
                 }
                 spans.push(Span::styled(format!("{} — {}", t.slug, t.title), style));
+                // a live background run gets a green dot; other states stay quiet
+                if t.run_state.as_deref() == Some("working") {
+                    spans.push(Span::styled(" ●", Style::default().fg(Color::Green)));
+                }
                 ListItem::new(Line::from(spans))
             })
             .collect();
@@ -651,7 +667,7 @@ impl App {
     }
 }
 
-/// Render the selected task's frontmatter as four compact lines for the meta pane.
+/// Render the selected task's frontmatter as compact lines for the meta pane.
 fn meta_lines(t: &TaskRow) -> Vec<Line<'static>> {
     let dim = Style::default().fg(Color::DarkGray);
     let dash = || "—".to_string();
@@ -659,6 +675,7 @@ fn meta_lines(t: &TaskRow) -> Vec<Line<'static>> {
     let issue = t.github_issue.map(|n| format!("#{}", n)).unwrap_or_else(dash);
     let pr = t.github_pr.map(|n| format!("#{}", n)).unwrap_or_else(dash);
     let tags = if t.tags.is_empty() { dash() } else { t.tags.join(", ") };
+    let (run_txt, run_color) = run_state_label(t.run_state.as_deref());
     vec![
         Line::from(Span::styled(
             t.id.clone(),
@@ -667,6 +684,8 @@ fn meta_lines(t: &TaskRow) -> Vec<Line<'static>> {
         Line::from(vec![
             Span::styled("branch: ", dim),
             Span::raw(t.branch.clone().unwrap_or_else(dash)),
+            Span::styled("   run: ", dim),
+            Span::styled(run_txt, Style::default().fg(run_color)),
         ]),
         Line::from(vec![
             Span::styled("issue: ", dim),
@@ -684,6 +703,19 @@ fn meta_lines(t: &TaskRow) -> Vec<Line<'static>> {
             Span::raw(tags),
         ]),
     ]
+}
+
+/// Human label + color for a background-session state from `claude agents`.
+fn run_state_label(state: Option<&str>) -> (String, Color) {
+    match state {
+        Some("working") => ("running".into(), Color::Green),
+        Some("done") => ("done".into(), Color::Blue),
+        Some("failed") => ("failed".into(), Color::Red),
+        Some("blocked") => ("blocked".into(), Color::Yellow),
+        Some("stopped") => ("stopped".into(), Color::DarkGray),
+        Some(other) => (other.to_string(), Color::Gray),
+        None => ("—".into(), Color::DarkGray),
+    }
 }
 
 /// A `Rect` centered in `area`, sized to the given percentage of width/height.
@@ -761,12 +793,57 @@ pub fn render_markdown(body: &str) -> Vec<Line<'static>> {
 
 fn load_all_rows(projects: &[StoreInfo]) -> Vec<TaskRow> {
     let mut out = Vec::new();
+    // (row index, run session id) for tasks that have been `rein run`
+    let mut sessions: Vec<(usize, String)> = Vec::new();
     for p in projects {
         for t in p.store.list_tasks() {
+            if let Some(id) = crate::state::load(&p.store, &t.id).run_session {
+                sessions.push((out.len(), id));
+            }
             out.push(TaskRow::from_ref(&t, &p.project, &p.store.root));
         }
     }
+    // one `claude agents` query covers every project; skip it when nothing ran
+    if !sessions.is_empty() {
+        let states = run_states();
+        for (i, id) in sessions {
+            out[i].run_state = states.get(&id).cloned();
+        }
+    }
     out
+}
+
+/// Map of background session id → state (`working`/`done`/`failed`/…) from
+/// `claude agents --json`. Best-effort: an empty map if claude is absent or errors.
+fn run_states() -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    let bin = std::env::var("REIN_CLAUDE").unwrap_or_else(|_| "claude".to_string());
+    let Ok(out) = std::process::Command::new(bin)
+        .args(["agents", "--json", "--all"])
+        .output()
+    else {
+        return map;
+    };
+    if !out.status.success() {
+        return map;
+    }
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out.stdout) else {
+        return map;
+    };
+    let arr = v
+        .as_array()
+        .cloned()
+        .or_else(|| v.get("sessions").and_then(|s| s.as_array()).cloned())
+        .unwrap_or_default();
+    for s in arr {
+        if let (Some(id), Some(state)) = (
+            s.get("id").and_then(|x| x.as_str()),
+            s.get("state").and_then(|x| x.as_str()),
+        ) {
+            map.insert(id.to_string(), state.to_string());
+        }
+    }
+    map
 }
 
 /// Locate a task by id across every project, reading fresh from disk.
@@ -862,11 +939,24 @@ fn event_loop(
     app: &mut App,
     projects: &[StoreInfo],
 ) -> Result<()> {
+    let mut idle_ticks = 0u32;
     loop {
         terminal.draw(|f| app.render(f))?;
         if !event::poll(std::time::Duration::from_millis(250))? {
+            // while a background run is live, re-poll `claude agents` every ~4s so
+            // its state (running → done) updates without the user touching anything
+            idle_ticks += 1;
+            let running = app
+                .tasks
+                .iter()
+                .any(|t| t.run_state.as_deref() == Some("working"));
+            if running && idle_ticks >= 16 {
+                idle_ticks = 0;
+                app.tasks = load_all_rows(projects);
+            }
             continue;
         }
+        idle_ticks = 0;
         let Event::Key(key) = event::read()? else {
             continue;
         };

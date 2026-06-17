@@ -27,6 +27,7 @@ fn rows_in(project: &str) -> Vec<TaskRow> {
         shared: false,
         project: project.clone(),
         store_root: PathBuf::from("/store"),
+        run_state: None,
     };
     vec![
         mk(
@@ -58,6 +59,7 @@ fn rows_multi() -> Vec<TaskRow> {
         shared: false,
         project: project.to_string(),
         store_root: PathBuf::from(format!("/store/{}", project)),
+        run_state: None,
     };
     vec![
         mk("web-a", "acme/web", Status::Inbox),
@@ -327,6 +329,23 @@ fn r_opens_pr_with_worktree_or_branch_mode() {
     let mut app = App::new(rows());
     key(&mut app, KeyCode::Char('r'));
     assert_eq!(key(&mut app, KeyCode::Char('x')), UiAction::None);
+    assert!(!app.pring);
+}
+
+#[test]
+fn r_skips_picker_when_task_already_has_a_branch() {
+    // a task already backed by a worktree/branch reuses it, so r opens the PR
+    // straight away instead of re-asking worktree vs branch.
+    let mut with_branch = rows();
+    with_branch[1].branch = Some("rein/auth-refactor".into());
+    let mut app = App::new(with_branch);
+    key(&mut app, KeyCode::Char('j')); // select the active auth-refactor task
+    assert_eq!(app.selected_task().unwrap().slug, "auth-refactor");
+    let action = key(&mut app, KeyCode::Char('r'));
+    assert_eq!(
+        action,
+        UiAction::CreatePr("task-20260613-auth-refactor".into(), false)
+    );
     assert!(!app.pring);
 }
 
