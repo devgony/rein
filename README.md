@@ -121,7 +121,7 @@ Open a draft PR with `rein pr [task] [--worktree]` (worktree-backed, else a main
 
 ## TUI (`rein ui`)
 
-A single dashboard across all your projects. Launched inside a repo, it pre-scopes to that project; press `P` to pick another. The right column shows a small **meta** pane — id, branch, issue/PR numbers, created/updated dates, tags — above the Markdown preview of the selected task.
+A single dashboard across all your projects. Launched inside a repo, it pre-scopes to that project; press `P` to pick another. The right column shows a small **meta** pane — id, branch, issue/PR numbers, created/updated dates, tags, and the live `run:` state of the last `rein run` (running/done/failed, polled from `claude agents`) — above the Markdown preview of the selected task. A task with a live run also gets a green `●` in the list.
 
 | key     | action                                        |
 | ------- | --------------------------------------------- |
@@ -240,7 +240,7 @@ claude --bg --dangerously-skip-permissions --name rein:$REIN_SLUG /run-rein-task
 
 `claude --bg` dispatches a **tracked background session** (it runs under Claude Code's daemon, not a detached `-p` process) and returns immediately. A custom `REIN_RUN_CMD` should likewise return promptly (self-background) — `rein run` waits for the command and surfaces its output.
 
-**Watching it.** `claude --bg` prints a session id, which `rein run` echoes and records. Monitor with Claude Code's own tools: `claude agents` (list all sessions + liveness), `claude attach <id>` (watch live / resume), `claude logs <id>` (recent output). `rein logs [task]` reprints the recorded id with those commands. For task progress you can also watch the checklist and Agent Log fill in via `rein ui` / `rein status` (the agent reports through `rein check`/`rein log`).
+**Watching it.** `claude --bg` prints a session id, which `rein run` echoes and records. The TUI shows the session's live state in the `run:` line of the meta pane (and a green `●` in the list while it's running), refreshed automatically every few seconds. For the full conversation use Claude Code's own tools: `claude agents` (list all sessions), `claude attach <id>` (watch live / resume), `claude logs <id>` (recent output); `rein logs [task]` reprints the recorded id with those commands. Task progress also shows as the checklist and Agent Log fill in (the agent reports through `rein check`/`rein log`).
 
 Override it for a different agent or flags, e.g. `git config rein.run 'claude --name rein:$REIN_SLUG -p /run-rein-task'`. Notes:
 

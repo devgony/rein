@@ -397,6 +397,19 @@ fn error_popup_shows_and_swallows_next_key() {
 }
 
 #[test]
+fn run_state_shows_in_meta_and_list() {
+    let mut with_run = rows();
+    with_run[1].run_state = Some("working".into()); // auth-refactor (active)
+    let mut app = App::new(with_run);
+    key(&mut app, KeyCode::Char('j')); // select the running task
+    assert_eq!(app.selected_task().unwrap().slug, "auth-refactor");
+    let screen = draw(&app);
+    assert!(screen.contains("run: "), "meta should show a run line");
+    assert!(screen.contains("running"), "working state renders as 'running'");
+    assert!(screen.contains("●"), "a live run shows a dot in the list");
+}
+
+#[test]
 fn meta_pane_shows_frontmatter() {
     let mut row = rows();
     row[0].branch = Some("rein/settings-cleanup".into());
