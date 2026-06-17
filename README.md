@@ -117,7 +117,7 @@ rein push                     # push local changes into the issue/PR managed sec
 
 Only the managed section between the `rein:begin`/`rein:end` markers is updated on the remote body; human text outside the markers is preserved. Conflicts are detected by a 3-way hash, backed up under `conflicts/`, and force-pushed with `rein push --resolved` after you resolve them.
 
-Open a draft PR with `rein pr [task] [--worktree]` (worktree-backed, else a main-repo branch), or fold it into the claim with `rein start … --draft-pr`, or attach an existing one with `rein attach-pr <n>`; then update it with `rein push` (the Agent Log folds into a `<details>`). In the TUI, `r` opens the same PR flow (pick `w` worktree / `b` branch).
+Open a draft PR with `rein pr [task] [--worktree]` (worktree-backed, else a main-repo branch), or attach an existing one with `rein attach-pr <n>`; then update it with `rein push` (the Agent Log folds into a `<details>`). In the TUI, `r` opens the same PR flow (pick `w` worktree / `b` branch). `rein pr` pushes the branch to `origin` for you; if the branch has no commits yet it just warns (GitHub rejects an empty PR) — commit your work first, then run `rein pr` again. (`rein start … --draft-pr` folds PR creation into the claim, but since a freshly claimed branch has no commits it will warn — the usual flow is start → work → `rein pr`.)
 
 ## TUI (`rein ui`)
 

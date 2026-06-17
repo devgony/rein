@@ -108,6 +108,39 @@ impl Repo {
         .is_ok()
     }
 
+    /// Best-effort base branch a PR would target: the remote's default head if
+    /// known, else a local `main`/`master`. `None` when nothing obvious exists.
+    pub fn default_branch(&self) -> Option<String> {
+        if let Ok(s) = git_in(&self.workdir, &["rev-parse", "--abbrev-ref", "origin/HEAD"]) {
+            if let Some(b) = s.strip_prefix("origin/") {
+                if !b.is_empty() {
+                    return Some(b.to_string());
+                }
+            }
+        }
+        ["main", "master"]
+            .into_iter()
+            .find(|b| self.branch_exists(b))
+            .map(str::to_string)
+    }
+
+    /// Number of commits on `branch` not reachable from `base` (`base..branch`).
+    pub fn commits_ahead(&self, base: &str, branch: &str) -> Result<usize> {
+        let out = git_in(
+            &self.workdir,
+            &["rev-list", "--count", &format!("{}..{}", base, branch)],
+        )?;
+        Ok(out.trim().parse().unwrap_or(0))
+    }
+
+    /// Push `branch` to origin and set upstream, so `gh pr create --head` finds
+    /// it on the remote.
+    pub fn push_branch(&self, branch: &str) -> Result<()> {
+        git_in(&self.workdir, &["push", "-u", "origin", branch])
+            .context("git push failed")
+            .map(|_| ())
+    }
+
     /// Path of the per-worktree task pointer file (truth of task↔worktree binding).
     pub fn task_pointer(&self) -> PathBuf {
         self.git_dir.join("rein-task")

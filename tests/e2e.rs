@@ -80,6 +80,21 @@ fn store_root(env: &Env) -> PathBuf {
     env.home.join(".local/share/rein").join(key)
 }
 
+/// Add a bare `origin` remote and push `main`, so PR creation can push branches.
+fn add_origin(env: &Env) {
+    git(&env.home, env._tmp.path(), &["init", "--bare", "origin.git"]);
+    let url = env._tmp.path().join("origin.git");
+    git(&env.home, &env.repo, &["remote", "add", "origin", url.to_str().unwrap()]);
+    git(&env.home, &env.repo, &["push", "origin", "main"]);
+}
+
+/// Write a file and commit it in `dir` (a repo or worktree).
+fn commit_in(env: &Env, dir: &Path, file: &str, msg: &str) {
+    fs::write(dir.join(file), "x").unwrap();
+    git(&env.home, dir, &["add", "."]);
+    git(&env.home, dir, &["commit", "-m", msg]);
+}
+
 fn read(p: &Path) -> String {
     fs::read_to_string(p).unwrap_or_else(|e| panic!("read {}: {}", p.display(), e))
 }
@@ -1174,78 +1189,72 @@ fn attach_pr_push_renders_managed_section_with_folded_log() {
 }
 
 #[test]
-fn start_draft_pr_records_number() {
+fn start_draft_pr_warns_without_commits() {
     let env = setup();
     init(&env);
     let gh = fake_gh(&env);
     rein(&env, &env.repo).args(["new", "feat"]).assert().success();
+    // a freshly claimed branch has no commits → PR creation warns, none is made
     let mut c = rein(&env, &env.repo);
     gh.apply(&mut c);
     c.args(["start", "feat", "--worktree", "--draft-pr"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("draft PR: #7"));
-    assert!(read(&store_root(&env).join("active/feat.md")).contains("github_pr: 7"));
-    assert!(gh.log_text().contains("pr create --draft"));
+        .failure()
+        .stderr(predicate::str::contains("no commits on 'rein/feat'"));
+    // the task is still claimed + the worktree set up; only the PR is skipped
+    assert!(store_root(&env).join("worktrees/feat").is_dir());
+    assert!(!read(&store_root(&env).join("active/feat.md")).contains("github_pr: 7"));
 }
 
 #[test]
-fn pr_worktree_on_inbox_opens_under_store() {
+fn pr_inbox_worktree_warns_without_commits() {
     let env = setup();
     init(&env);
-    let gh = fake_gh(&env);
     rein(&env, &env.repo).args(["new", "feat"]).assert().success();
-    let mut c = rein(&env, &env.repo);
-    gh.apply(&mut c);
-    c.args(["pr", "feat", "--worktree"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("draft PR: #7"));
-    // worktree lives under the rein store, not beside the repo
-    assert!(store_root(&env).join("worktrees/feat").is_dir(), "worktree not under store");
-    assert!(!env._tmp.path().join("proj-wt/feat").exists(), "should not litter parent dir");
-    // inbox → active with the PR recorded
-    assert!(read(&store_root(&env).join("active/feat.md")).contains("github_pr: 7"));
-    assert!(gh.log_text().contains("pr create --draft"));
-    // a second PR is refused
-    let mut c2 = rein(&env, &env.repo);
-    gh.apply(&mut c2);
-    c2.args(["pr", "feat"])
+    // the worktree is created under the store, but with no commits the PR warns
+    rein(&env, &env.repo)
+        .args(["pr", "feat", "--worktree"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("already has PR #7"));
+        .stderr(
+            predicate::str::contains("no commits on 'rein/feat'")
+                .and(predicate::str::contains("rein pr")),
+        );
+    assert!(store_root(&env).join("worktrees/feat").is_dir(), "worktree not under store");
+    assert!(!env._tmp.path().join("proj-wt/feat").exists(), "should not litter parent dir");
+    assert!(!read(&store_root(&env).join("active/feat.md")).contains("github_pr: 7"));
 }
 
 #[test]
-fn pr_branch_mode_on_inbox_uses_main_repo_branch() {
+fn pr_branch_mode_creates_branch_but_warns_without_commits() {
     let env = setup();
     init(&env);
-    let gh = fake_gh(&env);
     rein(&env, &env.repo).args(["new", "alpha"]).assert().success();
-    let mut c = rein(&env, &env.repo);
-    gh.apply(&mut c);
-    c.args(["pr", "alpha"])
+    rein(&env, &env.repo)
+        .args(["pr", "alpha"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("draft PR: #7"));
-    // no worktree; branch created and checked out in the main repo
+        .failure()
+        .stderr(predicate::str::contains("no commits on 'rein/alpha'"));
+    // the branch was created + checked out in the main repo even though PR warned
     assert!(!store_root(&env).join("worktrees/alpha").exists());
     let branch = git(&env.home, &env.repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
     assert_eq!(branch, "rein/alpha");
-    assert!(read(&store_root(&env).join("active/alpha.md")).contains("github_pr: 7"));
 }
 
 #[test]
-fn pr_on_active_task_reuses_existing_branch() {
+fn pr_pushes_branch_and_opens_draft_when_commits_exist() {
     let env = setup();
     init(&env);
+    add_origin(&env);
     let gh = fake_gh(&env);
     rein(&env, &env.repo).args(["new", "beta"]).assert().success();
     rein(&env, &env.repo)
         .args(["start", "beta", "--worktree"])
         .assert()
         .success();
-    // already active, no PR yet → opens one on the existing worktree branch
+    // do work in the worktree so the branch has a commit ahead of main
+    commit_in(&env, &store_root(&env).join("worktrees/beta"), "feature.txt", "work");
+    // active task with commits → push the branch + open the draft PR
     let mut c = rein(&env, &env.repo);
     gh.apply(&mut c);
     c.args(["pr", "beta"])
@@ -1253,8 +1262,17 @@ fn pr_on_active_task_reuses_existing_branch() {
         .success()
         .stdout(predicate::str::contains("draft PR: #7"));
     assert!(read(&store_root(&env).join("active/beta.md")).contains("github_pr: 7"));
-    assert!(store_root(&env).join("worktrees/beta").is_dir());
     assert!(gh.log_text().contains("pr create --draft"));
+    // the branch was pushed to origin
+    let remotes = git(&env.home, &env.repo, &["branch", "-r"]);
+    assert!(remotes.contains("origin/rein/beta"), "branch not pushed: {}", remotes);
+    // a second PR is refused
+    let mut c2 = rein(&env, &env.repo);
+    gh.apply(&mut c2);
+    c2.args(["pr", "beta"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already has PR #7"));
 }
 
 #[test]

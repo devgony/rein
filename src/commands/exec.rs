@@ -182,6 +182,17 @@ fn create_draft_pr(
     branch_name: &str,
     st: &mut state::TaskState,
 ) -> Result<u64> {
+    // GitHub rejects a PR with no diff; warn instead of letting `gh` fail cryptically
+    if let Some(base) = ctx.repo.default_branch() {
+        if base != branch_name && ctx.repo.commits_ahead(&base, branch_name)? == 0 {
+            bail!(
+                "no commits on '{branch_name}' yet — nothing to open a PR against '{base}'. \
+                 Commit your work first, then run `rein pr` again."
+            );
+        }
+    }
+    // push the branch so `gh pr create --head` can find it on the remote
+    ctx.repo.push_branch(branch_name)?;
     let gh = Gh::in_dir(&ctx.repo.workdir);
     let body = task::pr_projection(&task.doc);
     let number = gh.pr_create_draft(&task.doc.front.title, &body, branch_name)?;
