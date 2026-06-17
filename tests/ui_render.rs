@@ -355,6 +355,7 @@ fn r_refuses_pr_when_attached_or_finished() {
 fn error_popup_shows_and_swallows_next_key() {
     let mut app = App::new(rows());
     app.popup = Some("branch 'rein/fix' already exists — git branch -D rein/fix".into());
+    app.popup_error = true;
     let screen = draw(&app);
     assert!(screen.contains("error — press any key to dismiss"));
     assert!(screen.contains("already exists"));
@@ -366,6 +367,14 @@ fn error_popup_shows_and_swallows_next_key() {
     app.popup = Some("boom".into());
     assert_eq!(key(&mut app, KeyCode::Char('q')), UiAction::None);
     assert!(app.popup.is_none());
+
+    // a non-error (run) popup uses the neutral title, not "error"
+    let mut app = App::new(rows());
+    app.popup = Some("running task — backgrounded · abcd1234".into());
+    app.popup_error = false;
+    let screen = draw(&app);
+    assert!(screen.contains("run — press any key to dismiss"));
+    assert!(screen.contains("backgrounded"));
 }
 
 #[test]

@@ -106,8 +106,10 @@ pub struct App {
     pub pring: bool,
     pub input: String,
     pub message: String,
-    /// A modal error overlay; `Some` blocks input until dismissed with any key.
+    /// A modal overlay; `Some` blocks input until dismissed with any key.
     pub popup: Option<String>,
+    /// Whether the current popup is an error (red) vs an informational result.
+    pub popup_error: bool,
     /// Active project filter: `None` shows every project, `Some(name)` scopes
     /// the task list to one. Pre-set to the launch repo's project so `rein ui`
     /// lands in the current project's tasks.
@@ -139,6 +141,7 @@ impl App {
             input: String::new(),
             message: String::new(),
             popup: None,
+            popup_error: false,
             project_scope: None,
             all_projects: Vec::new(),
             picking_project: false,
@@ -484,13 +487,17 @@ impl App {
     /// branch that already exists), dismissed with any key.
     fn render_popup(&self, f: &mut Frame, msg: &str) {
         let area = centered_rect(60, 40, f.area());
+        let (color, title) = if self.popup_error {
+            (Color::Red, " error — press any key to dismiss ")
+        } else {
+            (Color::Cyan, " run — press any key to dismiss ")
+        };
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Red))
-            .title(" error — press any key to dismiss ");
+            .border_style(Style::default().fg(color))
+            .title(title);
         let para = Paragraph::new(msg.to_string())
             .wrap(Wrap { trim: true })
-            .style(Style::default().fg(Color::Red))
             .block(block);
         f.render_widget(Clear, area);
         f.render_widget(para, area);
@@ -863,7 +870,12 @@ fn event_loop(
         let Event::Key(key) = event::read()? else {
             continue;
         };
-        match app.on_key(key) {
+        let action = app.on_key(key);
+        // no-op keys (navigation, typing) just update state → redraw next loop
+        if action == UiAction::None {
+            continue;
+        }
+        match action {
             UiAction::None => {}
             UiAction::Quit => return Ok(()),
             UiAction::Edit(path) => {
@@ -893,7 +905,10 @@ fn event_loop(
                                 app.tasks = load_all_rows(projects);
                                 select_path(app, &path);
                             }
-                            Err(e) => app.popup = Some(format!("{:#}", e)),
+                            Err(e) => {
+                                app.popup = Some(format!("{:#}", e));
+                                app.popup_error = true;
+                            }
                         }
                     }
                     None => {
@@ -965,9 +980,24 @@ fn event_loop(
                         .and_then(|ctx| crate::commands::exec::run(&ctx, Some(&task.slug))),
                     None => Err(anyhow!("task '{}' vanished", id)),
                 };
-                finish(app, projects, r);
+                // show the session id + claude attach/logs hints in a popup, not
+                // via stdout (raw mode would garble the dashboard)
+                match r {
+                    Ok(msg) => {
+                        app.popup = Some(msg);
+                        app.popup_error = false;
+                    }
+                    Err(e) => {
+                        app.popup = Some(format!("{:#}", e));
+                        app.popup_error = true;
+                    }
+                }
+                app.tasks = load_all_rows(projects);
             }
         }
+        // exec verbs print progress to stdout; in raw mode that leaves stray text
+        // on the alternate screen, so force a full repaint after each action
+        terminal.clear()?;
     }
 }
 
@@ -991,7 +1021,10 @@ fn finish(app: &mut App, projects: &[StoreInfo], result: Result<()>) {
         Ok(()) => app.message = "ok".to_string(),
         // surface failures as a modal popup, not a clipped status line — `{:#}`
         // flattens the whole anyhow chain so the cause (e.g. git's stderr) shows
-        Err(e) => app.popup = Some(format!("{:#}", e)),
+        Err(e) => {
+            app.popup = Some(format!("{:#}", e));
+            app.popup_error = true;
+        }
     }
     app.tasks = load_all_rows(projects);
 }

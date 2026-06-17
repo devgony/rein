@@ -231,7 +231,7 @@ fn set_branch_frontmatter(ctx: &Ctx, task: &TaskRef, branch: &str) -> Result<()>
 /// the agent resolves the task regardless of cwd. The command is detached
 /// (`nohup … &`) so it keeps running after rein returns; its transcript lands in
 /// the agent's own standard location (e.g. `~/.claude/projects/…`).
-pub fn run(ctx: &Ctx, query: Option<&str>) -> Result<()> {
+pub fn run(ctx: &Ctx, query: Option<&str>) -> Result<String> {
     let task = match query {
         Some(q) => ctx.store.find(q)?,
         None => resolve::resolve_task(ctx, None)?.0,
@@ -276,20 +276,23 @@ pub fn run(ctx: &Ctx, query: Option<&str>) -> Result<()> {
         String::from_utf8_lossy(&out.stderr)
     ));
 
-    println!("running {} in {}", task.id, dir.display());
-    if worktree.is_none() {
-        println!("note: no worktree — running in the main repo (edits are not isolated)");
-    }
-    print!("{}", reported);
-    if !reported.ends_with('\n') {
-        println!();
-    }
     // capture the daemon-assigned session id so `rein logs` can point back at it
     if let Some(id) = parse_session_id(&reported) {
         st.run_session = Some(id);
         state::save(&ctx.store, &task.id, &st)?;
     }
-    Ok(())
+
+    // return the summary (the caller decides how to show it — stdout or a TUI popup)
+    let mut msg = format!("running {} in {}", task.id, dir.display());
+    if worktree.is_none() {
+        msg.push_str("\nnote: no worktree — running in the main repo (edits are not isolated)");
+    }
+    let reported = reported.trim_end();
+    if !reported.is_empty() {
+        msg.push('\n');
+        msg.push_str(reported);
+    }
+    Ok(msg)
 }
 
 /// Point at the background session of a task's most recent `rein run`, using

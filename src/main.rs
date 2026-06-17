@@ -179,7 +179,7 @@ fn run() -> Result<()> {
             draft_pr,
         } => exec::start(&ctx, &task, worktree, branch.as_deref(), draft_pr),
         Cmd::Pr { task, worktree } => exec::create_pr(&ctx, task.as_deref(), worktree),
-        Cmd::Run { task } => exec::run(&ctx, task.as_deref()),
+        Cmd::Run { task } => exec::run(&ctx, task.as_deref()).map(|m| println!("{}", m)),
         Cmd::Logs { task } => exec::logs(&ctx, task.as_deref()),
         Cmd::Check { item_id, task } => exec::check(&ctx, &item_id, task.as_deref(), true),
         Cmd::Uncheck { item_id, task } => exec::check(&ctx, &item_id, task.as_deref(), false),
