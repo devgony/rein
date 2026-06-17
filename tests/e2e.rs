@@ -1350,22 +1350,23 @@ fn run_without_worktree_uses_repo_root_and_warns() {
 }
 
 #[test]
-fn run_seeds_skill_into_worktree_when_missing() {
+fn run_installs_skill_at_user_level_without_touching_repo() {
     let env = setup();
     init(&env);
-    // scaffold the skill but leave it uncommitted → a fresh worktree won't have it
-    rein(&env, &env.repo).args(["init", "--skill"]).assert().success();
     rein(&env, &env.repo).args(["new", "job"]).assert().success();
     rein(&env, &env.repo).args(["start", "job", "--worktree"]).assert().success();
+    let user_skill = env.home.join(".claude/skills/run-rein-task/SKILL.md");
     let wt_skill = store_root(&env).join("worktrees/job/.claude/skills/run-rein-task/SKILL.md");
-    assert!(!wt_skill.exists(), "uncommitted skill should not be in the fresh worktree");
+    assert!(!user_skill.exists(), "precondition: no user-level skill yet");
     rein(&env, &env.repo)
         .env("REIN_RUN_CMD", "true")
         .args(["run", "job"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("seeded run-rein-task skill"));
-    assert!(wt_skill.exists(), "rein run should seed the skill into the worktree");
+        .stdout(predicate::str::contains("installed run-rein-task skill"));
+    // installed globally for any worktree, but the repo/worktree stays clean
+    assert!(user_skill.exists(), "skill should be installed at the user level");
+    assert!(!wt_skill.exists(), "run must not add skill files to the repo worktree");
 }
 
 #[test]

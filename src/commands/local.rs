@@ -54,14 +54,35 @@ pub(crate) fn write_skill(base: &std::path::Path) -> Result<std::path::PathBuf> 
     Ok(path)
 }
 
-/// Write the skill into `base` only if it isn't already there, so a committed or
-/// customized skill is left untouched. Returns true if it wrote one.
-pub(crate) fn ensure_skill(base: &std::path::Path) -> Result<bool> {
-    if base.join(".claude/skills/run-rein-task/SKILL.md").exists() {
-        return Ok(false);
+/// Personal (user-level) location of the bundled skill, where Claude Code
+/// discovers it for every project regardless of cwd: `$CLAUDE_CONFIG_DIR/skills/…`
+/// or `~/.claude/skills/…`. `None` if neither env is set.
+fn user_skill_path() -> Option<std::path::PathBuf> {
+    let base = std::env::var("CLAUDE_CONFIG_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(|h| std::path::PathBuf::from(h).join(".claude"))
+        })?;
+    Some(base.join("skills/run-rein-task/SKILL.md"))
+}
+
+/// Install the bundled skill at the user level if absent, so `rein run` resolves
+/// `/run-rein-task` in any worktree without adding files to the repo. Returns the
+/// path if it wrote one; leaves an existing (possibly customized) skill untouched.
+pub(crate) fn ensure_user_skill() -> Result<Option<std::path::PathBuf>> {
+    let Some(path) = user_skill_path() else {
+        return Ok(None);
+    };
+    if path.exists() {
+        return Ok(None);
     }
-    write_skill(base)?;
-    Ok(true)
+    util::atomic_write(&path, SKILL_MD)?;
+    Ok(Some(path))
 }
 
 /// Create an inbox task draft in `store`. Returns its id and document path.
