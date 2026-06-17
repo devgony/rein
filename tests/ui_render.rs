@@ -337,7 +337,7 @@ fn r_skips_picker_when_task_already_has_a_branch() {
     // a task already backed by a worktree/branch reuses it, so r opens the PR
     // straight away instead of re-asking worktree vs branch.
     let mut with_branch = rows();
-    with_branch[1].branch = Some("rein/auth-refactor".into());
+    with_branch[1].branch = Some("auth-refactor".into());
     let mut app = App::new(with_branch);
     key(&mut app, KeyCode::Char('j')); // select the active auth-refactor task
     assert_eq!(app.selected_task().unwrap().slug, "auth-refactor");
@@ -412,7 +412,7 @@ fn run_state_shows_in_meta_and_list() {
 #[test]
 fn meta_pane_shows_frontmatter() {
     let mut row = rows();
-    row[0].branch = Some("rein/settings-cleanup".into());
+    row[0].branch = Some("settings-cleanup".into());
     row[0].github_issue = Some(41);
     row[0].github_pr = Some(7);
     row[0].tags = vec!["ui".into(), "cleanup".into()];
@@ -421,7 +421,7 @@ fn meta_pane_shows_frontmatter() {
     let app = App::new(row); // selection defaults to the first task
     let screen = draw(&app);
     assert!(screen.contains("meta"));
-    assert!(screen.contains("rein/settings-cleanup"));
+    assert!(screen.contains("settings-cleanup"));
     assert!(screen.contains("#41"));
     assert!(screen.contains("#7"));
     assert!(screen.contains("ui, cleanup"));

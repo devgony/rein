@@ -1017,8 +1017,7 @@ fn event_loop(
                             crate::commands::exec::start(&ctx, &task.slug, true, None, false)
                         }
                         StartMode::Branch => {
-                            let b = format!("rein/{}", task.slug);
-                            crate::commands::exec::start(&ctx, &task.slug, false, Some(&b), false)
+                            crate::commands::exec::start(&ctx, &task.slug, false, Some(&task.slug), false)
                         }
                     }),
                     None => Err(anyhow!("task '{}' vanished", id)),
@@ -1046,7 +1045,12 @@ fn event_loop(
             UiAction::Publish(id) => {
                 let r = match find_task(projects, &id) {
                     Some((info, task)) => ctx_for(info).and_then(|ctx| {
-                        if task.doc.front.github_issue.is_some() {
+                        // push to whatever's already attached (issue and/or PR);
+                        // only create an issue when the task is completely bare,
+                        // so a PR-only task publishes to its PR, not a new issue.
+                        if task.doc.front.github_issue.is_some()
+                            || task.doc.front.github_pr.is_some()
+                        {
                             crate::commands::sync_cmd::push_task(&ctx, &task, false)
                         } else {
                             crate::commands::sync_cmd::issue(&ctx, &task.slug)

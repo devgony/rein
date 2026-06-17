@@ -393,7 +393,7 @@ fn start_worktree_binds_task_by_cwd() {
 
     // branch recorded in frontmatter
     let doc = read(&store_root(&env).join("active/feat-one.md"));
-    assert!(doc.contains("branch: rein/feat-one"));
+    assert!(doc.contains("branch: feat-one"));
 }
 
 #[test]
@@ -1200,7 +1200,7 @@ fn start_draft_pr_warns_without_commits() {
     c.args(["start", "feat", "--worktree", "--draft-pr"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("no commits on 'rein/feat'"));
+        .stderr(predicate::str::contains("no commits on 'feat'"));
     // the task is still claimed + the worktree set up; only the PR is skipped
     assert!(store_root(&env).join("worktrees/feat").is_dir());
     assert!(!read(&store_root(&env).join("active/feat.md")).contains("github_pr: 7"));
@@ -1217,7 +1217,7 @@ fn pr_inbox_worktree_warns_without_commits() {
         .assert()
         .failure()
         .stderr(
-            predicate::str::contains("no commits on 'rein/feat'")
+            predicate::str::contains("no commits on 'feat'")
                 .and(predicate::str::contains("rein pr")),
         );
     assert!(store_root(&env).join("worktrees/feat").is_dir(), "worktree not under store");
@@ -1234,11 +1234,11 @@ fn pr_branch_mode_creates_branch_but_warns_without_commits() {
         .args(["pr", "alpha"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("no commits on 'rein/alpha'"));
+        .stderr(predicate::str::contains("no commits on 'alpha'"));
     // the branch was created + checked out in the main repo even though PR warned
     assert!(!store_root(&env).join("worktrees/alpha").exists());
     let branch = git(&env.home, &env.repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
-    assert_eq!(branch, "rein/alpha");
+    assert_eq!(branch, "alpha");
 }
 
 #[test]
@@ -1265,7 +1265,7 @@ fn pr_pushes_branch_and_opens_draft_when_commits_exist() {
     assert!(gh.log_text().contains("pr create --draft"));
     // the branch was pushed to origin
     let remotes = git(&env.home, &env.repo, &["branch", "-r"]);
-    assert!(remotes.contains("origin/rein/beta"), "branch not pushed: {}", remotes);
+    assert!(remotes.contains("origin/beta"), "branch not pushed: {}", remotes);
     // a second PR is refused
     let mut c2 = rein(&env, &env.repo);
     gh.apply(&mut c2);
@@ -1280,15 +1280,15 @@ fn pr_reports_actionable_error_when_branch_exists() {
     let env = setup();
     init(&env);
     rein(&env, &env.repo).args(["new", "dup"]).assert().success();
-    // a leftover branch from an earlier run collides with rein/<slug>
-    git(&env.home, &env.repo, &["branch", "rein/dup"]);
+    // a leftover branch from an earlier run collides with the task slug
+    git(&env.home, &env.repo, &["branch", "dup"]);
     rein(&env, &env.repo)
         .args(["pr", "dup", "--worktree"])
         .assert()
         .failure()
         .stderr(
-            predicate::str::contains("branch 'rein/dup' already exists")
-                .and(predicate::str::contains("git branch -D rein/dup")),
+            predicate::str::contains("branch 'dup' already exists")
+                .and(predicate::str::contains("git branch -D dup")),
         );
 }
 

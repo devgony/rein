@@ -92,7 +92,7 @@ You don't have to add `<!-- task:... -->` IDs by hand — the tool assigns them 
 ### B. Parallel worktrees (Claude Code multi-agent)
 
 ```sh
-rein start feat-a --worktree  # creates a worktree + branch rein/feat-a (prints its path)
+rein start feat-a --worktree  # creates a worktree + branch feat-a (prints its path)
 rein start feat-b --worktree
 ```
 

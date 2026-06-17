@@ -45,9 +45,7 @@ pub fn start(
         .to_string_lossy()
         .to_string();
 
-    let branch_name = branch
-        .map(|b| b.to_string())
-        .unwrap_or_else(|| format!("rein/{}", task.slug));
+    let branch_name = branch.map(|b| b.to_string()).unwrap_or_else(|| task.slug.clone());
 
     if worktree {
         setup_worktree(ctx, &task, &branch_name, &mut st)?;
@@ -90,7 +88,7 @@ pub fn create_pr(ctx: &Ctx, query: Option<&str>, worktree: bool) -> Result<()> {
     }
     // inbox → delegate to start, which claims + sets up + opens the PR in one go
     if task.status == Status::Inbox {
-        let branch = (!worktree).then(|| format!("rein/{}", task.slug));
+        let branch = (!worktree).then(|| task.slug.clone());
         return start(ctx, &task.slug, worktree, branch.as_deref(), true);
     }
     if task.status != Status::Active {
@@ -108,7 +106,7 @@ pub fn create_pr(ctx: &Ctx, query: Option<&str>, worktree: bool) -> Result<()> {
         .branch
         .clone()
         .or_else(|| st.branch.clone())
-        .unwrap_or_else(|| format!("rein/{}", task.slug));
+        .unwrap_or_else(|| task.slug.clone());
     if st.branch.is_none() {
         if worktree {
             setup_worktree(ctx, &task, &branch_name, &mut st)?;
