@@ -1370,6 +1370,54 @@ fn run_installs_skill_at_user_level_without_touching_repo() {
 }
 
 #[test]
+fn run_records_session_and_logs_finds_transcript() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "job"]).assert().success();
+    rein(&env, &env.repo).args(["start", "job", "--worktree"]).assert().success();
+    // fake agent: write a transcript named after the session id rein passes
+    let fake = "mkdir -p \"$HOME/.claude/projects/p\" && echo '{}' > \"$HOME/.claude/projects/p/$REIN_SESSION.jsonl\"";
+    rein(&env, &env.repo)
+        .env("REIN_RUN_CMD", fake)
+        .args(["run", "job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("session").and(predicate::str::contains("rein logs job")));
+    let id = task_id(&env, "active", "job");
+    let state = read(&store_root(&env).join("state").join(format!("{}.json", id)));
+    assert!(state.contains("run_session"), "session not recorded: {}", state);
+    // the agent is backgrounded → wait for the transcript to land
+    let projdir = env.home.join(".claude/projects/p");
+    let mut waited = 0;
+    while waited < 5000 && std::fs::read_dir(&projdir).map(|d| d.count() == 0).unwrap_or(true) {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        waited += 50;
+    }
+    // `rein logs` finds it by session id, regardless of the per-cwd dir name
+    rein(&env, &env.repo)
+        .args(["logs", "job"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains(".jsonl")
+                .and(predicate::str::contains("resume: claude --resume")),
+        );
+}
+
+#[test]
+fn logs_without_a_run_errors() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "job"]).assert().success();
+    rein(&env, &env.repo).args(["start", "job"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["logs", "job"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no run recorded"));
+}
+
+#[test]
 fn done_closes_issue_and_updates_pr() {
     let env = setup();
     init(&env);

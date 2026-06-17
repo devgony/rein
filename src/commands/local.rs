@@ -54,11 +54,11 @@ pub(crate) fn write_skill(base: &std::path::Path) -> Result<std::path::PathBuf> 
     Ok(path)
 }
 
-/// Personal (user-level) location of the bundled skill, where Claude Code
-/// discovers it for every project regardless of cwd: `$CLAUDE_CONFIG_DIR/skills/…`
-/// or `~/.claude/skills/…`. `None` if neither env is set.
-fn user_skill_path() -> Option<std::path::PathBuf> {
-    let base = std::env::var("CLAUDE_CONFIG_DIR")
+/// Claude Code's config dir: `$CLAUDE_CONFIG_DIR` or `~/.claude`. `None` if HOME
+/// is unset and the env isn't given. Skills live under `skills/`, transcripts
+/// under `projects/`.
+pub(crate) fn claude_config_dir() -> Option<std::path::PathBuf> {
+    std::env::var("CLAUDE_CONFIG_DIR")
         .ok()
         .filter(|s| !s.is_empty())
         .map(std::path::PathBuf::from)
@@ -67,8 +67,13 @@ fn user_skill_path() -> Option<std::path::PathBuf> {
                 .ok()
                 .filter(|s| !s.is_empty())
                 .map(|h| std::path::PathBuf::from(h).join(".claude"))
-        })?;
-    Some(base.join("skills/run-rein-task/SKILL.md"))
+        })
+}
+
+/// Personal (user-level) location of the bundled skill, where Claude Code
+/// discovers it for every project regardless of cwd.
+fn user_skill_path() -> Option<std::path::PathBuf> {
+    Some(claude_config_dir()?.join("skills/run-rein-task/SKILL.md"))
 }
 
 /// Install the bundled skill at the user level if absent, so `rein run` resolves

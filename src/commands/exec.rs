@@ -12,7 +12,8 @@ use std::process::{Command, Stdio};
 
 /// Default agent command for `rein run`. Launched via `sh -c`, so it can read the
 /// `REIN_*` env vars rein exports; override with `REIN_RUN_CMD` or git `rein.run`.
-const DEFAULT_RUN_CMD: &str = "claude --dangerously-skip-permissions --name rein:$REIN_SLUG -p /run-rein-task";
+const DEFAULT_RUN_CMD: &str =
+    "claude --dangerously-skip-permissions --session-id $REIN_SESSION --name rein:$REIN_SLUG -p /run-rein-task";
 
 /// inbox→active claim + optional worktree/branch/draft-PR.
 pub fn start(
@@ -233,7 +234,7 @@ pub fn run(ctx: &Ctx, query: Option<&str>) -> Result<()> {
         Some(q) => ctx.store.find(q)?,
         None => resolve::resolve_task(ctx, None)?.0,
     };
-    let st = state::load(&ctx.store, &task.id);
+    let mut st = state::load(&ctx.store, &task.id);
     let worktree = st.worktree.as_deref().map(PathBuf::from).filter(|p| p.exists());
     let dir = worktree.clone().unwrap_or_else(|| ctx.repo.workdir.clone());
     let branch = st
@@ -255,6 +256,10 @@ pub fn run(ctx: &Ctx, query: Option<&str>) -> Result<()> {
         println!("installed run-rein-task skill at {}", p.display());
     }
 
+    // a known session id lets us point back at the agent's transcript (the default
+    // command passes it via --session-id; custom commands can use $REIN_SESSION too)
+    let session = uuid::Uuid::new_v4().to_string();
+
     // `nohup … &` detaches the agent; null stdio keeps it off the TUI terminal
     Command::new("sh")
         .arg("-c")
@@ -264,6 +269,7 @@ pub fn run(ctx: &Ctx, query: Option<&str>) -> Result<()> {
         .env("REIN_SLUG", &task.slug)
         .env("REIN_BRANCH", &branch)
         .env("REIN_DIR", &dir)
+        .env("REIN_SESSION", &session)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -272,11 +278,49 @@ pub fn run(ctx: &Ctx, query: Option<&str>) -> Result<()> {
         .wait()
         .ok();
 
+    st.run_session = Some(session.clone());
+    state::save(&ctx.store, &task.id, &st)?;
+
     println!("running {} in {}", task.id, dir.display());
     if worktree.is_none() {
         println!("note: no worktree — running in the main repo (edits are not isolated)");
     }
+    println!("session {} — `rein logs {}` to view", session, task.slug);
     Ok(())
+}
+
+/// Locate and report the transcript of a task's most recent `rein run`. Claude
+/// Code names each transcript `<session-id>.jsonl` under a per-cwd dir in its
+/// config (`projects/`), so we find it by session id regardless of the dir name.
+pub fn logs(ctx: &Ctx, query: Option<&str>) -> Result<()> {
+    let task = match query {
+        Some(q) => ctx.store.find(q)?,
+        None => resolve::resolve_task(ctx, None)?.0,
+    };
+    let session = state::load(&ctx.store, &task.id)
+        .run_session
+        .with_context(|| format!("no run recorded for '{}' — run `rein run` first", task.slug))?;
+
+    match find_transcript(&session) {
+        Some(path) => {
+            println!("{}", path.display());
+            println!("resume: claude --resume {}", session);
+        }
+        None => {
+            println!("session {} — no transcript yet (the agent may still be starting)", session);
+            println!("resume: claude --resume {}", session);
+        }
+    }
+    Ok(())
+}
+
+/// Find `<session>.jsonl` under any per-cwd dir in Claude Code's `projects/`.
+fn find_transcript(session: &str) -> Option<PathBuf> {
+    let projects = crate::commands::local::claude_config_dir()?.join("projects");
+    std::fs::read_dir(projects).ok()?.flatten().find_map(|e| {
+        let p = e.path().join(format!("{}.jsonl", session));
+        p.exists().then_some(p)
+    })
 }
 
 // ---------------------------------------------------------------------------
