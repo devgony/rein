@@ -248,6 +248,12 @@ pub fn run(ctx: &Ctx, query: Option<&str>) -> Result<()> {
         .or_else(|| ctx.repo.config_get("rein.run"))
         .unwrap_or_else(|| DEFAULT_RUN_CMD.to_string());
 
+    // a fresh worktree only has the run-rein-task skill if it was committed;
+    // seed rein's bundled copy when absent so the default `/run-rein-task` resolves
+    if crate::commands::local::ensure_skill(&dir).unwrap_or(false) {
+        println!("seeded run-rein-task skill in {}", dir.display());
+    }
+
     // `nohup … &` detaches the agent; null stdio keeps it off the TUI terminal
     Command::new("sh")
         .arg("-c")

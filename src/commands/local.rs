@@ -39,13 +39,29 @@ pub fn init(skill: bool) -> Result<()> {
     }
     println!("store: {}", store.root.display());
     if skill {
-        let skill_path = repo
-            .workdir
-            .join(".claude/skills/run-rein-task/SKILL.md");
-        util::atomic_write(&skill_path, SKILL_MD)?;
+        let skill_path = write_skill(&repo.workdir)?;
         println!("skill: {}", skill_path.display());
     }
     Ok(())
+}
+
+/// Write the bundled `run-rein-task` skill under `base/.claude/skills/`, returning
+/// its path. Used by `init --skill` and `rein run` (to seed the skill in a fresh
+/// worktree). Overwrites — call `ensure_skill` to write only when missing.
+pub(crate) fn write_skill(base: &std::path::Path) -> Result<std::path::PathBuf> {
+    let path = base.join(".claude/skills/run-rein-task/SKILL.md");
+    util::atomic_write(&path, SKILL_MD)?;
+    Ok(path)
+}
+
+/// Write the skill into `base` only if it isn't already there, so a committed or
+/// customized skill is left untouched. Returns true if it wrote one.
+pub(crate) fn ensure_skill(base: &std::path::Path) -> Result<bool> {
+    if base.join(".claude/skills/run-rein-task/SKILL.md").exists() {
+        return Ok(false);
+    }
+    write_skill(base)?;
+    Ok(true)
 }
 
 /// Create an inbox task draft in `store`. Returns its id and document path.

@@ -1350,6 +1350,25 @@ fn run_without_worktree_uses_repo_root_and_warns() {
 }
 
 #[test]
+fn run_seeds_skill_into_worktree_when_missing() {
+    let env = setup();
+    init(&env);
+    // scaffold the skill but leave it uncommitted → a fresh worktree won't have it
+    rein(&env, &env.repo).args(["init", "--skill"]).assert().success();
+    rein(&env, &env.repo).args(["new", "job"]).assert().success();
+    rein(&env, &env.repo).args(["start", "job", "--worktree"]).assert().success();
+    let wt_skill = store_root(&env).join("worktrees/job/.claude/skills/run-rein-task/SKILL.md");
+    assert!(!wt_skill.exists(), "uncommitted skill should not be in the fresh worktree");
+    rein(&env, &env.repo)
+        .env("REIN_RUN_CMD", "true")
+        .args(["run", "job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("seeded run-rein-task skill"));
+    assert!(wt_skill.exists(), "rein run should seed the skill into the worktree");
+}
+
+#[test]
 fn done_closes_issue_and_updates_pr() {
     let env = setup();
     init(&env);

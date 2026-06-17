@@ -239,5 +239,6 @@ claude --dangerously-skip-permissions --name rein:$REIN_SLUG -p /run-rein-task
 
 Override it for a different agent or flags, e.g. `git config rein.run 'claude --name rein:$REIN_SLUG -p /run-rein-task'`. Notes:
 
-- The default runs fully autonomously (`--dangerously-skip-permissions`); Claude Code asks for a **one-time interactive acceptance** of bypass mode per machine — run `claude --dangerously-skip-permissions` once in a terminal first, or a detached run can't accept it.
+- The default runs fully autonomously (`--dangerously-skip-permissions`). Claude Code may show a one-time prompt to accept bypass mode, which a detached run can't answer — set `"skipDangerousModePermissionPrompt": true` in `~/.claude/settings.json` to suppress it (if you already use skip-permissions normally, this is likely already set).
 - Prefer a worktree (`rein start … --worktree`) so the autonomous run is isolated; running a branch-only task happens in the main repo and is **not** isolated (rein warns).
+- The default prompt is the `/run-rein-task` skill, which must exist in the run directory. A new worktree only has it if the skill is **committed** (`git add .claude/skills && commit`) — worktrees check out committed files only. `rein run` writes rein's bundled copy into the run dir if it's missing, so an uncommitted skill still works; commit it to share with teammates.
