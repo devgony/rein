@@ -70,6 +70,8 @@ enum Cmd {
         #[arg(long)]
         worktree: bool,
     },
+    /// Launch an agent on a task in its worktree, in the background (REIN_RUN_CMD)
+    Run { task: Option<String> },
     /// Check an item (LLM-safe mutation)
     Check {
         item_id: String,
@@ -175,6 +177,7 @@ fn run() -> Result<()> {
             draft_pr,
         } => exec::start(&ctx, &task, worktree, branch.as_deref(), draft_pr),
         Cmd::Pr { task, worktree } => exec::create_pr(&ctx, task.as_deref(), worktree),
+        Cmd::Run { task } => exec::run(&ctx, task.as_deref()),
         Cmd::Check { item_id, task } => exec::check(&ctx, &item_id, task.as_deref(), true),
         Cmd::Uncheck { item_id, task } => exec::check(&ctx, &item_id, task.as_deref(), false),
         Cmd::Log { text, task } => exec::log(&ctx, &text, task.as_deref()),

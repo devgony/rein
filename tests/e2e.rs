@@ -1292,6 +1292,63 @@ fn pr_reports_actionable_error_when_branch_exists() {
         );
 }
 
+/// Poll until `path` has non-empty content (the run command is backgrounded, and
+/// a shell `>` redirect creates the file empty before the command writes it).
+fn wait_for(path: &Path) -> String {
+    let mut waited = 0;
+    loop {
+        if let Ok(s) = fs::read_to_string(path) {
+            if !s.is_empty() {
+                return s;
+            }
+        }
+        if waited >= 5000 {
+            return fs::read_to_string(path).unwrap_or_default();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        waited += 50;
+    }
+}
+
+#[test]
+fn run_launches_agent_in_worktree_with_task_env() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "job"]).assert().success();
+    rein(&env, &env.repo).args(["start", "job", "--worktree"]).assert().success();
+    let marker = env.bin_dir.join("run_marker.txt");
+    let mut c = rein(&env, &env.repo);
+    c.env(
+        "REIN_RUN_CMD",
+        format!("printf '%s|%s' \"$REIN_TASK\" \"$REIN_DIR\" > {}", marker.display()),
+    );
+    c.args(["run", "job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("running"));
+    let content = wait_for(&marker);
+    let id = task_id(&env, "active", "job");
+    assert!(content.contains(&id), "REIN_TASK not set: {}", content);
+    assert!(content.contains("worktrees/job"), "REIN_DIR not the worktree: {}", content);
+}
+
+#[test]
+fn run_without_worktree_uses_repo_root_and_warns() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "solo"]).assert().success();
+    rein(&env, &env.repo).args(["start", "solo"]).assert().success(); // single mode, no worktree
+    let marker = env.bin_dir.join("run_marker2.txt");
+    let mut c = rein(&env, &env.repo);
+    c.env("REIN_RUN_CMD", format!("printf '%s' \"$REIN_DIR\" > {}", marker.display()));
+    c.args(["run", "solo"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("edits are not isolated"));
+    let content = wait_for(&marker);
+    assert!(!content.contains("worktrees/"), "should run in the repo root, got: {}", content);
+}
+
 #[test]
 fn done_closes_issue_and_updates_pr() {
     let env = setup();

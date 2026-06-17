@@ -72,6 +72,7 @@ pub enum UiAction {
     Done(String),
     Publish(String),        // issue if none attached, else push
     CreatePr(String, bool), // open a draft PR; bool = worktree (vs main-repo branch)
+    Run(String),            // launch an agent on the task in the background
 }
 
 /// How `s` claims a task: plain single mode, an isolated worktree, or a
@@ -429,6 +430,11 @@ impl App {
                     return UiAction::Publish(t.id.clone());
                 }
             }
+            KeyCode::Char('x') => match self.selected_task() {
+                Some(t) if t.status == Status::Active => return UiAction::Run(t.id.clone()),
+                Some(_) => self.message = "only active tasks can run (start it first)".into(),
+                None => {}
+            },
             KeyCode::Char('r') => match self.selected_task() {
                 Some(t) if t.github_pr.is_some() => self.message = "already has a PR".into(),
                 Some(t) if matches!(t.status, Status::Inbox | Status::Active) => self.pring = true,
@@ -631,7 +637,7 @@ impl App {
         } else if !self.message.is_empty() {
             self.message.clone()
         } else {
-            "j/k move · Tab status · P project · Enter edit · n new · s start · m move · d done · r PR · p issue/push · / filter · q quit"
+            "j/k move · Tab status · P project · Enter edit · n new · s start · m move · d done · x run · r PR · p issue/push · / filter · q quit"
                 .to_string()
         };
         f.render_widget(Paragraph::new(text).style(Style::default().fg(Color::DarkGray)), area);
@@ -949,6 +955,14 @@ fn event_loop(
                 let r = match find_task(projects, &id) {
                     Some((info, task)) => ctx_for(info)
                         .and_then(|ctx| crate::commands::exec::create_pr(&ctx, Some(&task.slug), worktree)),
+                    None => Err(anyhow!("task '{}' vanished", id)),
+                };
+                finish(app, projects, r);
+            }
+            UiAction::Run(id) => {
+                let r = match find_task(projects, &id) {
+                    Some((info, task)) => ctx_for(info)
+                        .and_then(|ctx| crate::commands::exec::run(&ctx, Some(&task.slug))),
                     None => Err(anyhow!("task '{}' vanished", id)),
                 };
                 finish(app, projects, r);

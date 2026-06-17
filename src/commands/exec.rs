@@ -8,6 +8,11 @@ use crate::util;
 use crate::Ctx;
 use anyhow::{anyhow, bail, Context, Result};
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
+
+/// Default agent command for `rein run`. Launched via `sh -c`, so it can read the
+/// `REIN_*` env vars rein exports; override with `REIN_RUN_CMD` or git `rein.run`.
+const DEFAULT_RUN_CMD: &str = "claude --dangerously-skip-permissions --name rein:$REIN_SLUG -p /run-rein-task";
 
 /// inbox→active claim + optional worktree/branch/draft-PR.
 pub fn start(
@@ -213,6 +218,58 @@ fn set_branch_frontmatter(ctx: &Ctx, task: &TaskRef, branch: &str) -> Result<()>
     doc.front.branch = Some(branch.to_string());
     doc.touch();
     ctx.store.write_doc(&task.path, &doc)
+}
+
+/// Launch an agent on a task in its own working directory, in the background.
+///
+/// rein knows where each task lives — it runs the configured command (default:
+/// Claude Code) with cwd set to the task's worktree (or the main repo if it only
+/// has a branch), exporting `REIN_TASK`/`REIN_SLUG`/`REIN_BRANCH`/`REIN_DIR` so
+/// the agent resolves the task regardless of cwd. The command is detached
+/// (`nohup … &`) so it keeps running after rein returns; its transcript lands in
+/// the agent's own standard location (e.g. `~/.claude/projects/…`).
+pub fn run(ctx: &Ctx, query: Option<&str>) -> Result<()> {
+    let task = match query {
+        Some(q) => ctx.store.find(q)?,
+        None => resolve::resolve_task(ctx, None)?.0,
+    };
+    let st = state::load(&ctx.store, &task.id);
+    let worktree = st.worktree.as_deref().map(PathBuf::from).filter(|p| p.exists());
+    let dir = worktree.clone().unwrap_or_else(|| ctx.repo.workdir.clone());
+    let branch = st
+        .branch
+        .clone()
+        .or_else(|| task.doc.front.branch.clone())
+        .unwrap_or_default();
+
+    let cmd = std::env::var("REIN_RUN_CMD")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| ctx.repo.config_get("rein.run"))
+        .unwrap_or_else(|| DEFAULT_RUN_CMD.to_string());
+
+    // `nohup … &` detaches the agent; null stdio keeps it off the TUI terminal
+    Command::new("sh")
+        .arg("-c")
+        .arg(format!("nohup {} &", cmd))
+        .current_dir(&dir)
+        .env("REIN_TASK", &task.id)
+        .env("REIN_SLUG", &task.slug)
+        .env("REIN_BRANCH", &branch)
+        .env("REIN_DIR", &dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to launch run command")?
+        .wait()
+        .ok();
+
+    println!("running {} in {}", task.id, dir.display());
+    if worktree.is_none() {
+        println!("note: no worktree — running in the main repo (edits are not isolated)");
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

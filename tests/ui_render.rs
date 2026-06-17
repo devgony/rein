@@ -257,6 +257,21 @@ fn m_moves_selected_task_to_any_state() {
 }
 
 #[test]
+fn x_runs_only_active_tasks() {
+    let mut app = App::new(rows());
+    // the inbox task (index 0) can't run — must be started first
+    assert_eq!(key(&mut app, KeyCode::Char('x')), UiAction::None);
+    assert!(app.message.contains("active"));
+    // the active task runs
+    key(&mut app, KeyCode::Char('j'));
+    assert_eq!(app.selected_task().unwrap().status, Status::Active);
+    assert_eq!(
+        key(&mut app, KeyCode::Char('x')),
+        UiAction::Run("task-20260613-auth-refactor".into())
+    );
+}
+
+#[test]
 fn s_opens_start_mode_picker() {
     // s on the inbox task opens the picker; each key maps to a start mode
     let cases = [
@@ -396,6 +411,7 @@ fn keybinding_hint_advertises_new_and_move() {
     assert!(screen.contains("m move"));
     assert!(screen.contains("P project"));
     assert!(screen.contains("r PR"));
+    assert!(screen.contains("x run"));
 }
 
 #[test]

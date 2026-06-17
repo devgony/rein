@@ -133,6 +133,7 @@ A single dashboard across all your projects. Launched inside a repo, it pre-scop
 | `s`     | start (inbox → active) → `s` single / `w` worktree / `b` branch |
 | `m`     | move to any state (i/a/d/c)                   |
 | `d`     | done                                          |
+| `x`     | run an agent on the task in the background (`REIN_RUN_CMD`) |
 | `r`     | open a draft PR (then `w` worktree / `b` branch) |
 | `p`     | publish issue or push                         |
 | `/`     | filter (matches project name too)             |
@@ -205,6 +206,7 @@ rein use <task>                      switch the task binding (worktree pointer /
 rein move <task> <status>            move to any state (plain relocation, no side effects)
 rein start <task> [--worktree] [--branch <b>] [--draft-pr]
 rein pr [task] [--worktree]           open a draft PR (worktree under the store, else a main-repo branch)
+rein run [task]                       launch an agent on the task in the background (in its worktree)
 rein check / uncheck <item-id> [--task <id>]
 rein log <text> [--task <id>]
 rein fail <item-id> --reason <text> [--task <id>]   resolve as failed (checked + struck through, drops from todo)
@@ -224,3 +226,18 @@ rein init --skill   # scaffold .claude/skills/run-rein-task/SKILL.md
 ```
 
 The skill gets remaining items via `rein todo` and changes state only through `rein check`/`log`/`fail` (never editing the Markdown directly). The full rules live in the scaffolded SKILL.md.
+
+### Launching the agent (`rein run`)
+
+You don't have to `cd` into a worktree to work a task — rein already knows where each task lives. `rein run [task]` (TUI: `x`) launches an agent **in the background**, with its cwd set to the task's worktree (or the main repo if the task only has a branch) and `REIN_TASK`/`REIN_SLUG`/`REIN_BRANCH`/`REIN_DIR` exported, so the agent resolves the task no matter where it was invoked. It's detached (`nohup … &`) and keeps running after rein returns; the agent writes its own transcript to its standard location (Claude Code: `~/.claude/projects/…`, visible in its background-agents view).
+
+The command is a template, resolved in order: `REIN_RUN_CMD` env → git config `rein.run` → the built-in default:
+
+```sh
+claude --dangerously-skip-permissions --name rein:$REIN_SLUG -p /run-rein-task
+```
+
+Override it for a different agent or flags, e.g. `git config rein.run 'claude --name rein:$REIN_SLUG -p /run-rein-task'`. Notes:
+
+- The default runs fully autonomously (`--dangerously-skip-permissions`); Claude Code asks for a **one-time interactive acceptance** of bypass mode per machine — run `claude --dangerously-skip-permissions` once in a terminal first, or a detached run can't accept it.
+- Prefer a worktree (`rein start … --worktree`) so the autonomous run is isolated; running a branch-only task happens in the main repo and is **not** isolated (rein warns).
