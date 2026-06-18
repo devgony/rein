@@ -120,6 +120,16 @@ local function start_terminal()
   return vim.fn.termopen(cmd, { on_exit = on_exit }) -- nvim < 0.10
 end
 
+-- Re-enter terminal mode when our float is the current window. The TUI only
+-- reads keys in terminal mode, so this is what keeps it controllable; the focus
+-- autocmd below calls it whenever our window regains focus. Guarded on the
+-- current window so it never grabs input while you're working elsewhere.
+local function refocus_terminal()
+  if state.win and vim.api.nvim_win_is_valid(state.win) and vim.api.nvim_get_current_win() == state.win then
+    vim.cmd("startinsert")
+  end
+end
+
 local function open()
   local cols, rows = vim.o.columns, vim.o.lines
   local w, h = dim(config.width, cols), dim(config.height, rows)
@@ -145,6 +155,21 @@ local function open()
     style = "minimal",
     border = config.border,
     title = config.title,
+  })
+
+  -- When another floating terminal (e.g. a second toggle-term plugin bound to
+  -- its own key) is layered over this float and then closed, nvim hands focus
+  -- back to our window in NORMAL mode — leaving the TUI visible but inert. Re-
+  -- enter terminal mode on every (Win|Buf)Enter into our window so the dashboard
+  -- stays controllable. Buffer-local, so it dies with the buffer on cleanup();
+  -- the group is cleared per open so re-toggling never stacks duplicates.
+  local group = vim.api.nvim_create_augroup("rein_focus", { clear = true })
+  vim.api.nvim_create_autocmd({ "WinEnter", "BufEnter" }, {
+    group = group,
+    buffer = state.buf,
+    callback = function()
+      vim.schedule(refocus_terminal)
+    end,
   })
 
   state.job = start_terminal()
