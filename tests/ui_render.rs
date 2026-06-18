@@ -28,6 +28,8 @@ fn rows_in(project: &str) -> Vec<TaskRow> {
         project: project.clone(),
         store_root: PathBuf::from("/store"),
         run_state: None,
+        worktree: None,
+        repo_dir: None,
     };
     vec![
         mk(
@@ -60,6 +62,8 @@ fn rows_multi() -> Vec<TaskRow> {
         project: project.to_string(),
         store_root: PathBuf::from(format!("/store/{}", project)),
         run_state: None,
+        worktree: None,
+        repo_dir: None,
     };
     vec![
         mk("web-a", "acme/web", Status::Inbox),
@@ -105,7 +109,8 @@ fn renders_task_list_and_markdown_preview() {
     assert!(screen.contains("- [ ] <!-- task:layout --> Layout"));
     // status line shows keybindings
     assert!(screen.contains("s start"));
-    assert!(screen.contains("p issue/push"));
+    assert!(screen.contains("i issue"));
+    assert!(screen.contains("r PR"));
 }
 
 #[test]
@@ -181,11 +186,11 @@ fn keys_dispatch_to_cli_verbs() {
     assert_eq!(action, UiAction::None);
     assert!(!app.starting);
     assert!(app.message.contains("inbox"));
-    // d finishes, p publishes/pushes
+    // d finishes; i begins issue creation (auth-refactor has no issue yet)
     let action = key(&mut app, KeyCode::Char('d'));
     assert_eq!(action, UiAction::Done("task-20260613-auth-refactor".into()));
-    let action = key(&mut app, KeyCode::Char('p'));
-    assert_eq!(action, UiAction::Publish("task-20260613-auth-refactor".into()));
+    let action = key(&mut app, KeyCode::Char('i'));
+    assert_eq!(action, UiAction::Issue("task-20260613-auth-refactor".into()));
     // q quits
     assert_eq!(key(&mut app, KeyCode::Char('q')), UiAction::Quit);
 }
@@ -350,16 +355,18 @@ fn r_skips_picker_when_task_already_has_a_branch() {
 }
 
 #[test]
-fn r_refuses_pr_when_attached_or_finished() {
-    // a task that already has a PR
+fn r_pushes_when_pr_attached_and_refuses_finished() {
+    // a task that already has a PR → r pushes the managed section to it
     let mut with_pr = rows();
     with_pr[0].github_pr = Some(7);
     let mut app = App::new(with_pr);
-    assert_eq!(key(&mut app, KeyCode::Char('r')), UiAction::None);
+    assert_eq!(
+        key(&mut app, KeyCode::Char('r')),
+        UiAction::PushPr("task-20260613-settings-cleanup".into())
+    );
     assert!(!app.pring);
-    assert!(app.message.contains("already has a PR"));
 
-    // a done task can't open a PR
+    // a done task with no PR can't open one
     let mut app = App::new(rows());
     for _ in 0..2 {
         key(&mut app, KeyCode::Char('j'));
@@ -451,8 +458,134 @@ fn keybinding_hint_advertises_new_and_move() {
     assert!(screen.contains("n new"));
     assert!(screen.contains("m move"));
     assert!(screen.contains("P project"));
+    assert!(screen.contains("i issue"));
     assert!(screen.contains("r PR"));
+    assert!(screen.contains("y copy dir"));
     assert!(screen.contains("x run"));
+}
+
+#[test]
+fn i_pushes_when_issue_attached_else_creates() {
+    // no issue yet → i begins issue creation (event loop offers a project picker)
+    let mut app = App::new(rows());
+    assert_eq!(
+        key(&mut app, KeyCode::Char('i')),
+        UiAction::Issue("task-20260613-settings-cleanup".into())
+    );
+
+    // an attached issue → i pushes the managed section to it
+    let mut with_issue = rows();
+    with_issue[0].github_issue = Some(41);
+    let mut app = App::new(with_issue);
+    assert_eq!(
+        key(&mut app, KeyCode::Char('i')),
+        UiAction::PushIssue("task-20260613-settings-cleanup".into())
+    );
+}
+
+#[test]
+fn y_copies_working_dir_worktree_then_repo() {
+    // a worktree-backed task yanks its worktree path
+    let mut row = rows();
+    row[0].worktree = Some("/store/worktrees/settings-cleanup".into());
+    row[0].repo_dir = Some(PathBuf::from("/repo"));
+    let mut app = App::new(row);
+    assert_eq!(
+        key(&mut app, KeyCode::Char('y')),
+        UiAction::CopyDir(PathBuf::from("/store/worktrees/settings-cleanup"))
+    );
+
+    // a plain branch/single task with no worktree falls back to the main repo
+    let mut row = rows();
+    row[0].repo_dir = Some(PathBuf::from("/repo"));
+    let mut app = App::new(row);
+    assert_eq!(
+        key(&mut app, KeyCode::Char('y')),
+        UiAction::CopyDir(PathBuf::from("/repo"))
+    );
+
+    // nothing known → no action, a message instead
+    let mut app = App::new(rows());
+    assert_eq!(key(&mut app, KeyCode::Char('y')), UiAction::None);
+    assert!(app.message.contains("no working directory"));
+}
+
+#[test]
+fn meta_shows_worktree_vs_branch_mode_and_dir() {
+    // worktree-backed task: branch line tagged (worktree), dir = the worktree
+    let mut row = rows();
+    row[0].branch = Some("settings-cleanup".into());
+    row[0].worktree = Some("/store/worktrees/settings-cleanup".into());
+    let app = App::new(row);
+    let screen = draw(&app);
+    assert!(screen.contains("(worktree)"));
+    assert!(screen.contains("/store/worktrees/settings-cleanup"));
+
+    // plain branch task: tagged (branch), dir = the main repo
+    let mut row = rows();
+    row[0].branch = Some("settings-cleanup".into());
+    row[0].repo_dir = Some(PathBuf::from("/repo"));
+    let app = App::new(row);
+    let screen = draw(&app);
+    assert!(screen.contains("(branch)"));
+}
+
+#[test]
+fn status_message_clears_on_next_key() {
+    // a sticky message (the "ok" case) must not pin itself over the hint forever:
+    // the next key press clears it so the keybindings come back
+    let mut app = App::new(rows());
+    app.message = "ok".into();
+    // a navigation key clears the stale message without setting a new one
+    key(&mut app, KeyCode::Char('j'));
+    assert!(app.message.is_empty());
+    let screen = draw(&app);
+    assert!(screen.contains("i issue"), "hint returns after the message clears");
+}
+
+#[test]
+fn issue_project_picker_selects_and_cancels() {
+    // simulate the event loop having fetched two boards and opened the picker
+    let mut app = App::new(rows());
+    app.issuing = true;
+    app.issue_target = Some("task-20260613-settings-cleanup".into());
+    app.issue_projects = vec!["Roadmap".into(), "Bugs".into()];
+    app.issue_sel = 0;
+    let screen = draw(&app);
+    assert!(screen.contains("— no project —"));
+    assert!(screen.contains("Roadmap"));
+
+    // row 0 (no project) → create without a board
+    let action = key(&mut app, KeyCode::Enter);
+    assert_eq!(
+        action,
+        UiAction::IssueWithProject("task-20260613-settings-cleanup".into(), None)
+    );
+    assert!(!app.issuing);
+
+    // j to "Roadmap" (row 1) then Enter → file onto that board
+    let mut app = App::new(rows());
+    app.issuing = true;
+    app.issue_target = Some("task-20260613-settings-cleanup".into());
+    app.issue_projects = vec!["Roadmap".into(), "Bugs".into()];
+    key(&mut app, KeyCode::Char('j'));
+    let action = key(&mut app, KeyCode::Enter);
+    assert_eq!(
+        action,
+        UiAction::IssueWithProject(
+            "task-20260613-settings-cleanup".into(),
+            Some("Roadmap".into())
+        )
+    );
+
+    // Esc cancels issue creation entirely
+    let mut app = App::new(rows());
+    app.issuing = true;
+    app.issue_target = Some("task-20260613-settings-cleanup".into());
+    app.issue_projects = vec!["Roadmap".into()];
+    assert_eq!(key(&mut app, KeyCode::Esc), UiAction::None);
+    assert!(!app.issuing);
+    assert!(app.issue_target.is_none());
 }
 
 #[test]

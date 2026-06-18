@@ -37,6 +37,12 @@ pub struct TaskRow {
     /// State of the last `rein run`'s background session (`working`/`done`/…),
     /// resolved from `claude agents`; `None` if no run or the session is unknown.
     pub run_state: Option<String>,
+    /// Isolated worktree path from the task's state, if it was started in
+    /// worktree mode — distinguishes a worktree-backed task from a plain branch.
+    pub worktree: Option<String>,
+    /// The project's main repo working directory (from `StoreInfo`), used as the
+    /// working directory for branch/single-mode tasks that have no worktree.
+    pub repo_dir: Option<PathBuf>,
     pub project: String,
     pub store_root: PathBuf,
 }
@@ -58,9 +64,25 @@ impl TaskRow {
             tags: t.doc.front.tags.clone(),
             shared: t.doc.front.shared,
             run_state: None,
+            worktree: None,
+            repo_dir: None,
             project: project.to_string(),
             store_root: store_root.to_path_buf(),
         }
+    }
+
+    /// Whether this task is backed by an isolated worktree (vs a plain branch).
+    pub fn is_worktree(&self) -> bool {
+        self.worktree.is_some()
+    }
+
+    /// The task's working directory: its worktree if it has one, else the
+    /// project's main repo. `None` when neither is known.
+    pub fn work_dir(&self) -> Option<PathBuf> {
+        self.worktree
+            .as_ref()
+            .map(PathBuf::from)
+            .or_else(|| self.repo_dir.clone())
     }
 }
 
@@ -74,8 +96,12 @@ pub enum UiAction {
     Start(String, StartMode), // claim inbox → active in the chosen mode
     Move(String, Status),    // free-form transition to any state
     Done(String),
-    Publish(String),        // issue if none attached, else push
+    Issue(String),                       // begin creating an issue (offers a project picker)
+    IssueWithProject(String, Option<String>), // create the issue, optionally onto a project board
+    PushIssue(String),                   // push the managed section to an existing issue
+    PushPr(String),                      // push the managed section to an existing PR
     CreatePr(String, bool), // open a draft PR; bool = worktree (vs main-repo branch)
+    CopyDir(PathBuf),       // copy the task's working directory path to the clipboard
     Run(String),            // launch an agent on the task in the background
 }
 
@@ -108,6 +134,15 @@ pub struct App {
     pub starting: bool,
     /// True while awaiting the PR-mode key (`w` worktree / `b` branch).
     pub pring: bool,
+    /// True while the optional issue→project picker is shown (after `i` on a
+    /// task with no issue yet).
+    pub issuing: bool,
+    /// Candidate GitHub Project titles for the issue picker (fetched on `i`).
+    pub issue_projects: Vec<String>,
+    /// Cursor in the issue→project picker (0 = "no project", then projects).
+    pub issue_sel: usize,
+    /// The task awaiting issue creation while the project picker is open.
+    pub issue_target: Option<String>,
     pub input: String,
     pub message: String,
     /// A modal overlay; `Some` blocks input until dismissed with any key.
@@ -142,6 +177,10 @@ impl App {
             moving: false,
             starting: false,
             pring: false,
+            issuing: false,
+            issue_projects: Vec::new(),
+            issue_sel: 0,
+            issue_target: None,
             input: String::new(),
             message: String::new(),
             popup: None,
@@ -242,6 +281,10 @@ impl App {
             self.popup = None;
             return UiAction::None;
         }
+        // a status message (e.g. "ok" after an action) is transient: any fresh
+        // key press clears it so the keybinding hint comes back — without this a
+        // single action would leave "ok" pinned in the status bar forever.
+        self.message.clear();
         // text entry for a new task title
         if self.creating {
             match key.code {
@@ -317,6 +360,36 @@ impl App {
                 if let Some(t) = self.selected_task() {
                     return UiAction::CreatePr(t.id.clone(), worktree);
                 }
+            }
+            return UiAction::None;
+        }
+        // optional issue→project picker: row 0 files no project, rows 1.. each
+        // file onto that board; Esc cancels issue creation entirely.
+        if self.issuing {
+            let len = self.issue_projects.len() + 1; // +1 for "no project"
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    self.issuing = false;
+                    self.issue_target = None;
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.issue_sel = (self.issue_sel + 1).min(len - 1);
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.issue_sel = self.issue_sel.saturating_sub(1);
+                }
+                KeyCode::Enter => {
+                    self.issuing = false;
+                    if let Some(id) = self.issue_target.take() {
+                        let project = if self.issue_sel == 0 {
+                            None
+                        } else {
+                            self.issue_projects.get(self.issue_sel - 1).cloned()
+                        };
+                        return UiAction::IssueWithProject(id, project);
+                    }
+                }
+                _ => {}
             }
             return UiAction::None;
         }
@@ -432,18 +505,29 @@ impl App {
                     self.message = "task is already finished (use m to reopen)".into();
                 }
             }
-            KeyCode::Char('p') => {
-                if let Some(t) = self.selected_task() {
-                    return UiAction::Publish(t.id.clone());
-                }
-            }
+            KeyCode::Char('i') => match self.selected_task() {
+                // already has an issue → push the managed section to it; otherwise
+                // begin creating one (the event loop offers an optional project picker)
+                Some(t) if t.github_issue.is_some() => return UiAction::PushIssue(t.id.clone()),
+                Some(t) => return UiAction::Issue(t.id.clone()),
+                None => self.message = "no task selected".into(),
+            },
+            KeyCode::Char('y') => match self.selected_task() {
+                // yank the task's working directory (worktree, else the main repo)
+                Some(t) => match t.work_dir() {
+                    Some(dir) => return UiAction::CopyDir(dir),
+                    None => self.message = "no working directory known for this task".into(),
+                },
+                None => self.message = "no task selected".into(),
+            },
             KeyCode::Char('x') => match self.selected_task() {
                 Some(t) if t.status == Status::Active => return UiAction::Run(t.id.clone()),
                 Some(_) => self.message = "only active tasks can run (start it first)".into(),
                 None => {}
             },
             KeyCode::Char('r') => match self.selected_task() {
-                Some(t) if t.github_pr.is_some() => self.message = "already has a PR".into(),
+                // already has a PR → push the managed section to it
+                Some(t) if t.github_pr.is_some() => return UiAction::PushPr(t.id.clone()),
                 Some(t) if matches!(t.status, Status::Inbox | Status::Active) => {
                     // a task already backed by a worktree/branch reuses it, so the
                     // w/b choice would be ignored — skip the prompt and open the PR.
@@ -473,7 +557,7 @@ impl App {
         // right column: a small meta pane above the markdown preview
         let right = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(6), Constraint::Min(3)])
+            .constraints([Constraint::Length(7), Constraint::Min(3)])
             .split(panes[1]);
         self.render_list(f, panes[0]);
         self.render_meta(f, right[0]);
@@ -516,11 +600,43 @@ impl App {
     }
 
     fn render_list(&self, f: &mut Frame, area: Rect) {
-        if self.picking_project {
+        if self.issuing {
+            self.render_issue_picker(f, area);
+        } else if self.picking_project {
             self.render_project_picker(f, area);
         } else {
             self.render_task_list(f, area);
         }
+    }
+
+    /// The optional issue→project picker: "no project" plus each GitHub Project
+    /// the new issue can be filed onto. Mirrors the project-scope picker.
+    fn render_issue_picker(&self, f: &mut Frame, area: Rect) {
+        let mut entries: Vec<String> = vec!["— no project —".to_string()];
+        entries.extend(self.issue_projects.iter().cloned());
+        let sel = self.issue_sel.min(entries.len().saturating_sub(1));
+        let items: Vec<ListItem> = entries
+            .iter()
+            .enumerate()
+            .map(|(row, name)| {
+                let marker = if row == sel { "▶ " } else { "  " };
+                let style = if row == sel {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(Line::from(vec![
+                    Span::raw(marker),
+                    Span::styled(name.clone(), style.fg(Color::Magenta)),
+                ]))
+            })
+            .collect();
+        let list = List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" file issue onto project — Enter to confirm · Esc cancel "),
+        );
+        f.render_widget(list, area);
     }
 
     /// The project level of the hierarchy: every project with its task count,
@@ -653,6 +769,8 @@ impl App {
                 "PR for {}: [w]orktree [b]ranch · any other key cancels",
                 slug
             )
+        } else if self.issuing {
+            "j/k pick project · Enter file issue · Esc cancel".to_string()
         } else if self.picking_project {
             "j/k move · Enter select project · Esc cancel".to_string()
         } else if self.filtering {
@@ -660,10 +778,12 @@ impl App {
         } else if !self.message.is_empty() {
             self.message.clone()
         } else {
-            "j/k move · Tab status · P project · Enter edit · n new · s start · m move · d done · x run · r PR · p issue/push · / filter · q quit"
+            "j/k move · Tab status · P project · Enter edit · n new · s start · m move · d done · x run · i issue · r PR · y copy dir · / filter · q quit"
                 .to_string()
         };
-        f.render_widget(Paragraph::new(text).style(Style::default().fg(Color::DarkGray)), area);
+        // a readable light gray so the hints stand out (the old dark gray was
+        // too dim against most terminal backgrounds)
+        f.render_widget(Paragraph::new(text).style(Style::default().fg(Color::Gray)), area);
     }
 }
 
@@ -676,6 +796,16 @@ fn meta_lines(t: &TaskRow) -> Vec<Line<'static>> {
     let pr = t.github_pr.map(|n| format!("#{}", n)).unwrap_or_else(dash);
     let tags = if t.tags.is_empty() { dash() } else { t.tags.join(", ") };
     let (run_txt, run_color) = run_state_label(t.run_state.as_deref());
+    // branch + how it's backed: an isolated worktree vs a plain main-repo branch
+    let branch_txt = match (&t.branch, t.is_worktree()) {
+        (Some(b), true) => format!("{} (worktree)", b),
+        (Some(b), false) => format!("{} (branch)", b),
+        (None, _) => dash(),
+    };
+    let dir_txt = t
+        .work_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(dash);
     vec![
         Line::from(Span::styled(
             t.id.clone(),
@@ -683,10 +813,11 @@ fn meta_lines(t: &TaskRow) -> Vec<Line<'static>> {
         )),
         Line::from(vec![
             Span::styled("branch: ", dim),
-            Span::raw(t.branch.clone().unwrap_or_else(dash)),
+            Span::raw(branch_txt),
             Span::styled("   run: ", dim),
             Span::styled(run_txt, Style::default().fg(run_color)),
         ]),
+        Line::from(vec![Span::styled("dir: ", dim), Span::raw(dir_txt)]),
         Line::from(vec![
             Span::styled("issue: ", dim),
             Span::raw(issue),
@@ -797,10 +928,14 @@ fn load_all_rows(projects: &[StoreInfo]) -> Vec<TaskRow> {
     let mut sessions: Vec<(usize, String)> = Vec::new();
     for p in projects {
         for t in p.store.list_tasks() {
-            if let Some(id) = crate::state::load(&p.store, &t.id).run_session {
+            let st = crate::state::load(&p.store, &t.id);
+            if let Some(id) = st.run_session.clone() {
                 sessions.push((out.len(), id));
             }
-            out.push(TaskRow::from_ref(&t, &p.project, &p.store.root));
+            let mut row = TaskRow::from_ref(&t, &p.project, &p.store.root);
+            row.worktree = st.worktree.clone();
+            row.repo_dir = p.repo_dir.clone();
+            out.push(row);
         }
     }
     // one `claude agents` query covers every project; skip it when nothing ran
@@ -877,6 +1012,58 @@ fn ctx_for(info: &StoreInfo) -> Result<Ctx> {
         repo,
         store: info.store.clone(),
     })
+}
+
+/// The repo owner (user/org login) from the git remote, used to scope the
+/// GitHub Project picker to the right account. `None` if no remote is set.
+fn repo_owner(ctx: &Ctx) -> Option<String> {
+    let remote = ctx.repo.remote_url()?;
+    let tail = remote
+        .trim()
+        .trim_end_matches('/')
+        .trim_end_matches(".git");
+    // ssh: git@host:owner/repo  |  https: https://host/owner/repo
+    let path = tail.rsplit_once(':').map(|(_, p)| p).unwrap_or(tail);
+    let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    (segs.len() >= 2).then(|| segs[segs.len() - 2].to_string())
+}
+
+/// Copy `text` to the system clipboard. Tries the common CLIs in turn so it
+/// works on macOS (pbcopy) and Linux (wl-copy / xclip / xsel); errors if none
+/// is available or the write fails.
+fn copy_to_clipboard(text: &str) -> Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let candidates: [(&str, &[&str]); 4] = [
+        ("pbcopy", &[]),
+        ("wl-copy", &[]),
+        ("xclip", &["-selection", "clipboard"]),
+        ("xsel", &["--clipboard", "--input"]),
+    ];
+    let mut last_err: Option<anyhow::Error> = None;
+    for (bin, args) in candidates {
+        let spawned = Command::new(bin)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        let mut child = match spawned {
+            Ok(c) => c,
+            Err(e) => {
+                last_err = Some(anyhow!("{}: {}", bin, e));
+                continue;
+            }
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(text.as_bytes())?;
+        }
+        if child.wait()?.success() {
+            return Ok(());
+        }
+        last_err = Some(anyhow!("{} exited with an error", bin));
+    }
+    Err(last_err.unwrap_or_else(|| anyhow!("no clipboard tool found (pbcopy/wl-copy/xclip/xsel)")))
 }
 
 pub fn run() -> Result<()> {
@@ -1042,23 +1229,63 @@ fn event_loop(
                 };
                 finish(app, projects, r);
             }
-            UiAction::Publish(id) => {
+            UiAction::Issue(id) => {
+                // begin issue creation: offer an optional project picker, but only
+                // if the owner actually has Projects — otherwise create straight away
+                match find_task(projects, &id).and_then(|(info, task)| {
+                    ctx_for(info).ok().map(|ctx| (ctx, task))
+                }) {
+                    Some((ctx, task)) => {
+                        let owner = repo_owner(&ctx);
+                        let gh = crate::gh::Gh::in_dir(&ctx.repo.workdir);
+                        let names = gh.project_titles(owner.as_deref());
+                        if names.is_empty() {
+                            let r = crate::commands::sync_cmd::issue(&ctx, &task.slug, None);
+                            finish(app, projects, r);
+                        } else {
+                            app.issue_projects = names;
+                            app.issue_target = Some(id);
+                            app.issue_sel = 0;
+                            app.issuing = true;
+                        }
+                    }
+                    None => finish(app, projects, Err(anyhow!("task '{}' vanished", id))),
+                }
+            }
+            UiAction::IssueWithProject(id, project) => {
                 let r = match find_task(projects, &id) {
                     Some((info, task)) => ctx_for(info).and_then(|ctx| {
-                        // push to whatever's already attached (issue and/or PR);
-                        // only create an issue when the task is completely bare,
-                        // so a PR-only task publishes to its PR, not a new issue.
-                        if task.doc.front.github_issue.is_some()
-                            || task.doc.front.github_pr.is_some()
-                        {
-                            crate::commands::sync_cmd::push_task(&ctx, &task, false)
-                        } else {
-                            crate::commands::sync_cmd::issue(&ctx, &task.slug)
-                        }
+                        crate::commands::sync_cmd::issue(&ctx, &task.slug, project.as_deref())
                     }),
                     None => Err(anyhow!("task '{}' vanished", id)),
                 };
                 finish(app, projects, r);
+            }
+            UiAction::PushIssue(id) => {
+                let r = match find_task(projects, &id) {
+                    Some((info, task)) => ctx_for(info)
+                        .and_then(|ctx| crate::commands::sync_cmd::push_issue(&ctx, &task)),
+                    None => Err(anyhow!("task '{}' vanished", id)),
+                };
+                finish(app, projects, r);
+            }
+            UiAction::PushPr(id) => {
+                let r = match find_task(projects, &id) {
+                    Some((info, task)) => ctx_for(info)
+                        .and_then(|ctx| crate::commands::sync_cmd::push_pr(&ctx, &task)),
+                    None => Err(anyhow!("task '{}' vanished", id)),
+                };
+                finish(app, projects, r);
+            }
+            UiAction::CopyDir(dir) => {
+                let path = dir.display().to_string();
+                match copy_to_clipboard(&path) {
+                    Ok(()) => app.message = format!("copied {}", path),
+                    Err(e) => {
+                        app.popup = Some(format!("clipboard copy failed: {:#}", e));
+                        app.popup_error = true;
+                    }
+                }
             }
             UiAction::CreatePr(id, worktree) => {
                 let r = match find_task(projects, &id) {

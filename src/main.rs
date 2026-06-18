@@ -107,7 +107,12 @@ enum Cmd {
         task: Option<String>,
     },
     /// Publish a task as a GitHub issue (shared inbox)
-    Issue { task: String },
+    Issue {
+        task: String,
+        /// Also file the issue onto a GitHub Project board (title or number)
+        #[arg(long)]
+        project: Option<String>,
+    },
     /// Import/refresh all rein-labeled issues
     PullInbox,
     /// Pull the resolved task's issue
@@ -190,7 +195,7 @@ fn run() -> Result<()> {
             task,
         } => exec::fail(&ctx, &item_id, &reason, task.as_deref()),
         Cmd::Retry { item_id, task } => exec::retry(&ctx, &item_id, task.as_deref()),
-        Cmd::Issue { task } => sync_cmd::issue(&ctx, &task),
+        Cmd::Issue { task, project } => sync_cmd::issue(&ctx, &task, project.as_deref()),
         Cmd::PullInbox => sync_cmd::pull_inbox(&ctx),
         Cmd::Pull => sync_cmd::pull(&ctx),
         Cmd::Push { resolved } => sync_cmd::push(&ctx, resolved),

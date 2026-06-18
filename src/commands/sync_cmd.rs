@@ -13,8 +13,9 @@ fn ensure_ids_saved(ctx: &Ctx, task: &TaskRef) -> Result<TaskRef> {
     crate::commands::assign_ids(&ctx.store, task)
 }
 
-/// `rein issue <task>` — publish a local doc as a new GitHub issue.
-pub fn issue(ctx: &Ctx, query: &str) -> Result<()> {
+/// `rein issue <task> [--project <name>]` — publish a local doc as a new GitHub
+/// issue, optionally filing it onto a Project board.
+pub fn issue(ctx: &Ctx, query: &str, project: Option<&str>) -> Result<()> {
     let _lock = SyncLock::acquire(&ctx.store)?;
     let task = ctx.store.find(query)?;
     if let Some(n) = task.doc.front.github_issue {
@@ -25,7 +26,7 @@ pub fn issue(ctx: &Ctx, query: &str) -> Result<()> {
 
     let gh = Gh::in_dir(&ctx.repo.workdir);
     gh.ensure_label();
-    let number = gh.issue_create(&task.doc.front.title, &block)?;
+    let number = gh.issue_create(&task.doc.front.title, &block, project)?;
 
     let mut doc = task.doc.clone();
     doc.front.github_issue = Some(number);
@@ -182,6 +183,35 @@ pub fn push_task(ctx: &Ctx, task: &TaskRef, resolved: bool) -> Result<()> {
         push_surface(ctx, &task, &gh, Surface::Pr(number), resolved)?;
     }
     Ok(())
+}
+
+/// Push the managed section to the task's issue only (TUI `i` on a task that
+/// already has an issue). Mirrors `push_task` but targets a single surface so
+/// `i` and `r` publish to their own surfaces independently.
+pub fn push_issue(ctx: &Ctx, task: &TaskRef) -> Result<()> {
+    let _lock = SyncLock::acquire(&ctx.store)?;
+    let task = ensure_ids_saved(ctx, task)?;
+    let number = task
+        .doc
+        .front
+        .github_issue
+        .with_context(|| format!("'{}' has no attached issue", task.slug))?;
+    let gh = Gh::in_dir(&ctx.repo.workdir);
+    push_surface(ctx, &task, &gh, Surface::Issue(number), false)
+}
+
+/// Push the managed section to the task's PR only (TUI `r` on a task that
+/// already has a PR).
+pub fn push_pr(ctx: &Ctx, task: &TaskRef) -> Result<()> {
+    let _lock = SyncLock::acquire(&ctx.store)?;
+    let task = ensure_ids_saved(ctx, task)?;
+    let number = task
+        .doc
+        .front
+        .github_pr
+        .with_context(|| format!("'{}' has no attached PR", task.slug))?;
+    let gh = Gh::in_dir(&ctx.repo.workdir);
+    push_surface(ctx, &task, &gh, Surface::Pr(number), false)
 }
 
 enum Surface {

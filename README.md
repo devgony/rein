@@ -110,6 +110,7 @@ Clean up explicitly from the parent session (`rein done feat-a` / `rein cancel f
 
 ```sh
 rein issue settings-cleanup   # publish a GitHub issue (rein label, marker-wrapped)
+rein issue settings-cleanup --project Roadmap  # …and file it onto a GitHub Project board
 rein pull-inbox               # import rein-labeled issues (idempotent)
 rein pull                     # apply remote issue-body changes
 rein push                     # push local changes into the issue/PR managed section
@@ -121,7 +122,7 @@ Open a draft PR with `rein pr [task] [--worktree]` (worktree-backed, else a main
 
 ## TUI (`rein ui`)
 
-A single dashboard across all your projects. Launched inside a repo, it pre-scopes to that project; press `P` to pick another. The right column shows a small **meta** pane — id, branch, issue/PR numbers, created/updated dates, tags, and the live `run:` state of the last `rein run` (running/done/failed, polled from `claude agents`) — above the Markdown preview of the selected task. A task with a live run also gets a green `●` in the list.
+A single dashboard across all your projects. Launched inside a repo, it pre-scopes to that project; press `P` to pick another. The right column shows a small **meta** pane — id, branch (tagged `(worktree)` or `(branch)`), the working `dir:`, issue/PR numbers, created/updated dates, tags, and the live `run:` state of the last `rein run` (running/done/failed, polled from `claude agents`) — above the Markdown preview of the selected task. A task with a live run also gets a green `●` in the list.
 
 | key     | action                                        |
 | ------- | --------------------------------------------- |
@@ -134,8 +135,9 @@ A single dashboard across all your projects. Launched inside a repo, it pre-scop
 | `m`     | move to any state (i/a/d/c)                   |
 | `d`     | done                                          |
 | `x`     | run an agent on the task in the background (`REIN_RUN_CMD`) |
-| `r`     | open a draft PR (then `w` worktree / `b` branch) |
-| `p`     | publish issue or push                         |
+| `i`     | create the issue (pick a GitHub Project, or none), or push to an existing one |
+| `r`     | open a draft PR (then `w` worktree / `b` branch), or push to an existing one |
+| `y`     | copy the task's working directory path to the clipboard |
 | `/`     | filter (matches project name too)             |
 | `q`     | quit                                          |
 

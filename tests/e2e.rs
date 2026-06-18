@@ -965,6 +965,30 @@ fn issue_publishes_projection_and_assigns_ids() {
 }
 
 #[test]
+fn issue_with_project_flag_files_onto_board() {
+    let env = setup();
+    init(&env);
+    let gh = fake_gh(&env);
+    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    seed_items(&env, "demo");
+
+    // --project passes the board name through to `gh issue create --project`
+    let mut c = rein(&env, &env.repo);
+    gh.apply(&mut c);
+    c.args(["issue", "demo", "--project", "Roadmap"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("issue #41"));
+
+    assert!(
+        gh.log_text().contains("--project Roadmap"),
+        "gh log: {}",
+        gh.log_text()
+    );
+    assert!(read(&store_root(&env).join("inbox/demo.md")).contains("github_issue: 41"));
+}
+
+#[test]
 fn push_local_change_preserves_human_text() {
     let env = setup();
     init(&env);

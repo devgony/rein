@@ -102,14 +102,41 @@ impl Gh {
         );
     }
 
-    pub fn issue_create(&self, title: &str, body: &str) -> Result<u64> {
-        let out = self.run(
-            &[
-                "issue", "create", "--title", title, "--body-file", "-", "--label", "rein",
-            ],
-            Some(body),
-        )?;
+    pub fn issue_create(&self, title: &str, body: &str, project: Option<&str>) -> Result<u64> {
+        let mut args = vec![
+            "issue", "create", "--title", title, "--body-file", "-", "--label", "rein",
+        ];
+        // `--project <title|number>` files the new issue onto a GitHub Project
+        // board (Projects v2); omitted when no project was chosen.
+        if let Some(p) = project {
+            args.extend(["--project", p]);
+        }
+        let out = self.run(&args, Some(body))?;
         Self::parse_number_from_url(&out, "/issues")
+    }
+
+    /// Titles of the owner's GitHub Projects (v2), for the optional issue→project
+    /// picker. Best-effort: an empty list if `gh` lacks the `project` scope or
+    /// the command errors. `owner` scopes to a user/org login when known.
+    pub fn project_titles(&self, owner: Option<&str>) -> Vec<String> {
+        let mut args = vec!["project", "list", "--format", "json"];
+        if let Some(o) = owner {
+            args.extend(["--owner", o]);
+        }
+        let Ok(out) = self.run(&args, None) else {
+            return Vec::new();
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&out) else {
+            return Vec::new();
+        };
+        v.get("projects")
+            .and_then(|x| x.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|p| p.get("title").and_then(|t| t.as_str()).map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub fn issue_view_body(&self, number: u64) -> Result<String> {
