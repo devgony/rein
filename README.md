@@ -118,7 +118,7 @@ rein push                     # push local changes into the issue/PR managed sec
 
 Only the managed section between the `rein:begin`/`rein:end` markers is updated on the remote body; human text outside the markers is preserved. Conflicts are detected by a 3-way hash, backed up under `conflicts/`, and force-pushed with `rein push --resolved` after you resolve them.
 
-Open a draft PR with `rein pr [task] [--worktree]` (worktree-backed, else a main-repo branch), or attach an existing one with `rein attach-pr <n>`; then update it with `rein push` (the Agent Log folds into a `<details>`). In the TUI, `r` opens the same PR flow (pick `w` worktree / `b` branch). `rein pr` pushes the branch to `origin` for you; if the branch has no commits yet it just warns (GitHub rejects an empty PR) — commit your work first, then run `rein pr` again. (`rein start … --draft-pr` folds PR creation into the claim, but since a freshly claimed branch has no commits it will warn — the usual flow is start → work → `rein pr`.)
+Open a draft PR with `rein pr [task] [--worktree]` (worktree-backed, else a main-repo branch), or attach an existing one with `rein attach-pr <n>`; then update it with `rein push` (the Agent Log folds into a `<details>`). In the TUI, `p` opens the same PR flow (pick `w` worktree / `b` branch). `rein pr` pushes the branch to `origin` for you; if the branch has no commits yet it just warns (GitHub rejects an empty PR) — commit your work first, then run `rein pr` again. (`rein start … --draft-pr` folds PR creation into the claim, but since a freshly claimed branch has no commits it will warn — the usual flow is start → work → `rein pr`.)
 
 ## TUI (`rein ui`)
 
@@ -137,7 +137,7 @@ A single dashboard across all your projects. Launched inside a repo, it pre-scop
 | `D`     | delete permanently (asks `y` to confirm; removes files + worktree) |
 | `x`     | run an agent on the task in the background (`REIN_RUN_CMD`) |
 | `i`     | create the issue (pick a GitHub Project, or none), or push to an existing one |
-| `r`     | open a draft PR (then `w` worktree / `b` branch), or push to an existing one |
+| `p`     | open a draft PR (then `w` worktree / `b` branch), or push to an existing one |
 | `y`     | copy the task's working directory path to the clipboard |
 | `/`     | filter (matches project name too)             |
 | `q`     | quit                                          |

@@ -546,7 +546,7 @@ impl App {
                 Some(_) => self.message = "only active tasks can run (start it first)".into(),
                 None => {}
             },
-            KeyCode::Char('r') => match self.selected_task() {
+            KeyCode::Char('p') => match self.selected_task() {
                 // already has a PR → push the managed section to it
                 Some(t) if t.github_pr.is_some() => return UiAction::PushPr(t.id.clone()),
                 Some(t) if matches!(t.status, Status::Inbox | Status::Active) => {
@@ -802,7 +802,7 @@ impl App {
         } else if !self.message.is_empty() {
             self.message.clone()
         } else {
-            "j/k move · Tab status · P project · Enter edit · n new · s start · m move · d done · D delete · x run · i issue · r PR · y copy dir · / filter · q quit"
+            "j/k move · Tab status · P project · Enter edit · n new · s start · m move · d done · D delete · x run · i issue · p PR · y copy dir · / filter · q quit"
                 .to_string()
         };
         // a readable light gray so the hints stand out (the old dark gray was

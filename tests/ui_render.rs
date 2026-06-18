@@ -110,7 +110,7 @@ fn renders_task_list_and_markdown_preview() {
     // status line shows keybindings
     assert!(screen.contains("s start"));
     assert!(screen.contains("i issue"));
-    assert!(screen.contains("r PR"));
+    assert!(screen.contains("p PR"));
 }
 
 #[test]
@@ -334,10 +334,10 @@ fn s_opens_start_mode_picker() {
 }
 
 #[test]
-fn r_opens_pr_with_worktree_or_branch_mode() {
-    // r on an inbox task opens the worktree/branch picker; w → worktree-backed PR
+fn p_opens_pr_with_worktree_or_branch_mode() {
+    // p on an inbox task opens the worktree/branch picker; w → worktree-backed PR
     let mut app = App::new(rows());
-    assert_eq!(key(&mut app, KeyCode::Char('r')), UiAction::None);
+    assert_eq!(key(&mut app, KeyCode::Char('p')), UiAction::None);
     assert!(app.pring);
     let screen = draw(&app);
     assert!(screen.contains("PR for settings-cleanup:"));
@@ -348,9 +348,9 @@ fn r_opens_pr_with_worktree_or_branch_mode() {
     );
     assert!(!app.pring);
 
-    // r then b → main-repo branch PR
+    // p then b → main-repo branch PR
     let mut app = App::new(rows());
-    key(&mut app, KeyCode::Char('r'));
+    key(&mut app, KeyCode::Char('p'));
     let action = key(&mut app, KeyCode::Char('b'));
     assert_eq!(
         action,
@@ -359,21 +359,21 @@ fn r_opens_pr_with_worktree_or_branch_mode() {
 
     // any other key cancels the picker
     let mut app = App::new(rows());
-    key(&mut app, KeyCode::Char('r'));
+    key(&mut app, KeyCode::Char('p'));
     assert_eq!(key(&mut app, KeyCode::Char('x')), UiAction::None);
     assert!(!app.pring);
 }
 
 #[test]
-fn r_skips_picker_when_task_already_has_a_branch() {
-    // a task already backed by a worktree/branch reuses it, so r opens the PR
+fn p_skips_picker_when_task_already_has_a_branch() {
+    // a task already backed by a worktree/branch reuses it, so p opens the PR
     // straight away instead of re-asking worktree vs branch.
     let mut with_branch = rows();
     with_branch[1].branch = Some("auth-refactor".into());
     let mut app = App::new(with_branch);
     key(&mut app, KeyCode::Char('j')); // select the active auth-refactor task
     assert_eq!(app.selected_task().unwrap().slug, "auth-refactor");
-    let action = key(&mut app, KeyCode::Char('r'));
+    let action = key(&mut app, KeyCode::Char('p'));
     assert_eq!(
         action,
         UiAction::CreatePr("task-20260613-auth-refactor".into(), false)
@@ -382,13 +382,13 @@ fn r_skips_picker_when_task_already_has_a_branch() {
 }
 
 #[test]
-fn r_pushes_when_pr_attached_and_refuses_finished() {
-    // a task that already has a PR → r pushes the managed section to it
+fn p_pushes_when_pr_attached_and_refuses_finished() {
+    // a task that already has a PR → p pushes the managed section to it
     let mut with_pr = rows();
     with_pr[0].github_pr = Some(7);
     let mut app = App::new(with_pr);
     assert_eq!(
-        key(&mut app, KeyCode::Char('r')),
+        key(&mut app, KeyCode::Char('p')),
         UiAction::PushPr("task-20260613-settings-cleanup".into())
     );
     assert!(!app.pring);
@@ -399,7 +399,7 @@ fn r_pushes_when_pr_attached_and_refuses_finished() {
         key(&mut app, KeyCode::Char('j'));
     }
     assert_eq!(app.selected_task().unwrap().slug, "old-thing");
-    assert_eq!(key(&mut app, KeyCode::Char('r')), UiAction::None);
+    assert_eq!(key(&mut app, KeyCode::Char('p')), UiAction::None);
     assert!(!app.pring);
     assert!(app.message.contains("inbox/active"));
 }
@@ -487,7 +487,7 @@ fn keybinding_hint_advertises_new_and_move() {
     assert!(screen.contains("D delete"));
     assert!(screen.contains("P project"));
     assert!(screen.contains("i issue"));
-    assert!(screen.contains("r PR"));
+    assert!(screen.contains("p PR"));
     assert!(screen.contains("y copy dir"));
     assert!(screen.contains("x run"));
 }
