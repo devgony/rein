@@ -134,6 +134,7 @@ A single dashboard across all your projects. Launched inside a repo, it pre-scop
 | `s`     | start (inbox → active) → `s` single / `w` worktree / `b` branch |
 | `m`     | move to any state (i/a/d/c)                   |
 | `d`     | done                                          |
+| `D`     | delete permanently (asks `y` to confirm; removes files + worktree) |
 | `x`     | run an agent on the task in the background (`REIN_RUN_CMD`) |
 | `i`     | create the issue (pick a GitHub Project, or none), or push to an existing one |
 | `r`     | open a draft PR (then `w` worktree / `b` branch), or push to an existing one |
@@ -218,6 +219,7 @@ rein issue <task> | pull-inbox | pull | push [--resolved]
 rein attach-issue <n> | attach-pr <n>
 rein done [task] [--keep-worktree]
 rein cancel [task] [--keep-worktree] [--force]
+rein delete <task> [--force]         permanently remove a task (files + worktree; no GitHub effects)
 rein doctor                          rebuild state/, fix frontmatter drift
 rein status | root | ui
 ```

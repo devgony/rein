@@ -801,6 +801,67 @@ fn cancel_force_discards_dirty_worktree() {
 }
 
 #[test]
+fn delete_removes_inbox_task_files() {
+    let env = setup();
+    init(&env);
+    let root = store_root(&env);
+    rein(&env, &env.repo).args(["new", "scratch"]).assert().success();
+    rein(&env, &env.repo).args(["start", "scratch"]).assert().success(); // single mode → current pointer
+    let id = task_id(&env, "active", "scratch");
+    assert_eq!(read(&root.join("current")).trim(), id);
+
+    // delete a task with no worktree → doc, state, and current pointer all gone
+    rein(&env, &env.repo)
+        .args(["delete", "scratch"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("deleted").and(predicate::str::contains(&id)));
+    assert!(!root.join("active/scratch.md").exists());
+    assert!(!root.join("state").join(format!("{}.json", id)).exists());
+    assert!(!root.join("current").exists(), "current pointer must be cleared");
+
+    // deleting a vanished task errors
+    rein(&env, &env.repo)
+        .args(["delete", "scratch"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no task matches"));
+}
+
+#[test]
+fn delete_refuses_dirty_worktree_unless_forced() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "wt task"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["start", "wt-task", "--worktree"])
+        .assert()
+        .success();
+    let wt = store_root(&env).join("worktrees/wt-task");
+    fs::write(wt.join("junk.txt"), "wip").unwrap();
+
+    // a dirty worktree blocks deletion without --force; nothing is removed
+    rein(&env, &env.repo)
+        .args(["delete", "wt-task"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--force"));
+    assert!(wt.exists(), "worktree must survive a refused delete");
+    assert!(store_root(&env).join("active/wt-task.md").exists());
+
+    // --force discards the worktree and removes every record
+    let id = task_id(&env, "active", "wt-task");
+    rein(&env, &env.repo)
+        .args(["delete", "wt-task", "--force"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removed worktree"));
+    assert!(!wt.exists());
+    assert!(!store_root(&env).join("active/wt-task.md").exists());
+    assert!(!store_root(&env).join("state").join(format!("{}.json", id)).exists());
+}
+
+#[test]
 fn move_transitions_any_direction_without_side_effects() {
     let env = setup();
     init(&env);

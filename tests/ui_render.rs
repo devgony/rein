@@ -264,6 +264,33 @@ fn m_moves_selected_task_to_any_state() {
 }
 
 #[test]
+fn shift_d_confirms_then_deletes() {
+    // D opens a confirmation; only y proceeds to the delete action
+    let mut app = App::new(rows());
+    assert_eq!(key(&mut app, KeyCode::Char('D')), UiAction::None);
+    assert!(app.deleting);
+    let screen = draw(&app);
+    assert!(screen.contains("delete settings-cleanup permanently?"));
+    let action = key(&mut app, KeyCode::Char('y'));
+    assert_eq!(
+        action,
+        UiAction::Delete("task-20260613-settings-cleanup".into())
+    );
+    assert!(!app.deleting);
+
+    // any other key cancels without deleting (no destructive default)
+    let mut app = App::new(rows());
+    key(&mut app, KeyCode::Char('D'));
+    assert_eq!(key(&mut app, KeyCode::Char('n')), UiAction::None);
+    assert!(!app.deleting);
+    // lowercase d is still "done", not delete
+    assert_eq!(
+        key(&mut app, KeyCode::Char('d')),
+        UiAction::Done("task-20260613-settings-cleanup".into())
+    );
+}
+
+#[test]
 fn x_runs_only_active_tasks() {
     let mut app = App::new(rows());
     // the inbox task (index 0) can't run — must be started first
@@ -457,6 +484,7 @@ fn keybinding_hint_advertises_new_and_move() {
     let screen = draw(&app);
     assert!(screen.contains("n new"));
     assert!(screen.contains("m move"));
+    assert!(screen.contains("D delete"));
     assert!(screen.contains("P project"));
     assert!(screen.contains("i issue"));
     assert!(screen.contains("r PR"));

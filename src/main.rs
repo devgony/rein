@@ -141,6 +141,13 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// Permanently delete a task: remove its files + worktree (no GitHub effects)
+    Delete {
+        task: String,
+        /// Discard a dirty worktree instead of refusing
+        #[arg(long)]
+        force: bool,
+    },
     /// Rebuild state/ from task files, fix drift
     Doctor,
     /// Show store, resolved task and per-status counts
@@ -210,6 +217,7 @@ fn run() -> Result<()> {
             keep_worktree,
             force,
         } => exec::cancel(&ctx, task.as_deref(), keep_worktree, force),
+        Cmd::Delete { task, force } => exec::delete(&ctx, &task, force),
         Cmd::Doctor => local::doctor(&ctx),
         Cmd::Status => local::status(&ctx),
         Cmd::Root => local::root(&ctx),

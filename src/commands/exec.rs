@@ -623,3 +623,46 @@ pub fn cancel(ctx: &Ctx, query: Option<&str>, keep_worktree: bool, force: bool) 
     println!("canceled {}", task.id);
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// delete (hard removal)
+// ---------------------------------------------------------------------------
+
+/// `rein delete <task>` — permanently remove a task: its document, derived
+/// state, any conflict backups, and its worktree. A local, destructive
+/// operation with no GitHub side effects (use `cancel` to also close a linked
+/// issue). Refuses a dirty worktree unless `--force`, mirroring `cancel`.
+pub fn delete(ctx: &Ctx, query: &str, force: bool) -> Result<()> {
+    let task = ctx.store.find(query)?;
+    // pre-flight before any removal so a refusal leaves the task fully intact
+    let wt = worktree_info(ctx, &task.id)?;
+    if let Some(info) = &wt {
+        if info.dirty && !force {
+            bail!(
+                "worktree {} has uncommitted changes — use --force to discard, or commit first",
+                info.path.display()
+            );
+        }
+    }
+
+    // remove the worktree first (git needs the repo intact), then the records
+    if let Some(info) = wt {
+        ctx.repo.worktree_remove(&info.path, force)?;
+        println!("removed worktree {}", info.path.display());
+    }
+    std::fs::remove_file(&task.path)
+        .with_context(|| format!("failed to remove {}", task.path.display()))?;
+    state::remove(&ctx.store, &task.id)?;
+    // drop any conflict backups keyed by this task's slug (best-effort)
+    for suffix in [".local.md", ".remote.md"] {
+        let backup = ctx.store.conflicts_dir().join(format!("{}{}", task.slug, suffix));
+        if backup.exists() {
+            let _ = std::fs::remove_file(&backup);
+        }
+    }
+    if ctx.store.read_current().as_deref() == Some(task.id.as_str()) {
+        ctx.store.clear_current()?;
+    }
+    println!("deleted {}", task.id);
+    Ok(())
+}

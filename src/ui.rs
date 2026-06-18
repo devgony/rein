@@ -96,6 +96,7 @@ pub enum UiAction {
     Start(String, StartMode), // claim inbox → active in the chosen mode
     Move(String, Status),    // free-form transition to any state
     Done(String),
+    Delete(String),          // permanently remove the task (files + worktree)
     Issue(String),                       // begin creating an issue (offers a project picker)
     IssueWithProject(String, Option<String>), // create the issue, optionally onto a project board
     PushIssue(String),                   // push the managed section to an existing issue
@@ -130,6 +131,8 @@ pub struct App {
     pub filtering: bool,
     pub creating: bool,
     pub moving: bool,
+    /// True while awaiting the delete confirmation key (`y` confirms; else cancels).
+    pub deleting: bool,
     /// True while awaiting the start-mode key (`s` single / `w` worktree / `b` branch).
     pub starting: bool,
     /// True while awaiting the PR-mode key (`w` worktree / `b` branch).
@@ -175,6 +178,7 @@ impl App {
             filtering: false,
             creating: false,
             moving: false,
+            deleting: false,
             starting: false,
             pring: false,
             issuing: false,
@@ -327,6 +331,16 @@ impl App {
                     } else {
                         return UiAction::Move(id, to);
                     }
+                }
+            }
+            return UiAction::None;
+        }
+        // confirm a destructive delete: only `y` proceeds; any other key cancels
+        if self.deleting {
+            self.deleting = false;
+            if matches!(key.code, KeyCode::Char('y')) {
+                if let Some(t) = self.selected_task() {
+                    return UiAction::Delete(t.id.clone());
                 }
             }
             return UiAction::None;
@@ -503,6 +517,13 @@ impl App {
                         return UiAction::Done(t.id.clone());
                     }
                     self.message = "task is already finished (use m to reopen)".into();
+                }
+            }
+            KeyCode::Char('D') => {
+                if self.selected_task().is_some() {
+                    self.deleting = true;
+                } else {
+                    self.message = "no task selected".into();
                 }
             }
             KeyCode::Char('i') => match self.selected_task() {
@@ -757,6 +778,9 @@ impl App {
                 "move {} to: [i]nbox [a]ctive [d]one [c]anceled · Esc cancel",
                 slug
             )
+        } else if self.deleting {
+            let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
+            format!("delete {} permanently? [y]es · any other key cancels", slug)
         } else if self.starting {
             let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
             format!(
@@ -778,7 +802,7 @@ impl App {
         } else if !self.message.is_empty() {
             self.message.clone()
         } else {
-            "j/k move · Tab status · P project · Enter edit · n new · s start · m move · d done · x run · i issue · r PR · y copy dir · / filter · q quit"
+            "j/k move · Tab status · P project · Enter edit · n new · s start · m move · d done · D delete · x run · i issue · r PR · y copy dir · / filter · q quit"
                 .to_string()
         };
         // a readable light gray so the hints stand out (the old dark gray was
@@ -1225,6 +1249,17 @@ fn event_loop(
                     Some((info, _)) => {
                         ctx_for(info).and_then(|ctx| crate::commands::exec::done(&ctx, Some(&id), false))
                     }
+                    None => Err(anyhow!("task '{}' vanished", id)),
+                };
+                finish(app, projects, r);
+            }
+            UiAction::Delete(id) => {
+                // force=false so a dirty worktree blocks deletion with a clear
+                // popup (mirrors `cancel`); the `D`→`y` confirm is the safety gate
+                // for the common case of discarding inbox/draft tasks.
+                let r = match find_task(projects, &id) {
+                    Some((info, task)) => ctx_for(info)
+                        .and_then(|ctx| crate::commands::exec::delete(&ctx, &task.slug, false)),
                     None => Err(anyhow!("task '{}' vanished", id)),
                 };
                 finish(app, projects, r);
