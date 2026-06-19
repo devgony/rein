@@ -239,14 +239,16 @@ You don't have to `cd` into a worktree to work a task — rein already knows whe
 The command is a template, resolved in order: `REIN_RUN_CMD` env → git config `rein.run` → the built-in default:
 
 ```sh
-claude --bg --dangerously-skip-permissions --name rein:$REIN_SLUG /run-rein-task
+claude --bg --dangerously-skip-permissions /run-rein-task
 ```
 
 `claude --bg` dispatches a **tracked background session** (it runs under Claude Code's daemon, not a detached `-p` process) and returns immediately. A custom `REIN_RUN_CMD` should likewise return promptly (self-background) — `rein run` waits for the command and surfaces its output.
 
+No `--name` is passed, so Claude Code auto-names the session from the prompt — easier to read in `claude agents` than a forced `rein:<slug>` label, and rein tracks the session by its **id** regardless. Add `--name` in a custom command if you want to pin your own label.
+
 **Watching it.** `claude --bg` prints a session id, which `rein run` echoes and records. The TUI shows the session's live state in the `run:` line of the meta pane (and a green `●` in the list while it's running), refreshed automatically every few seconds. For the full conversation use Claude Code's own tools: `claude agents` (list all sessions), `claude attach <id>` (watch live / resume), `claude logs <id>` (recent output); `rein logs [task]` reprints the recorded id with those commands. Task progress also shows as the checklist and Agent Log fill in (the agent reports through `rein check`/`rein log`).
 
-Override it for a different agent or flags, e.g. `git config rein.run 'claude --name rein:$REIN_SLUG -p /run-rein-task'`. Notes:
+Override it for a different agent or flags, e.g. `git config rein.run 'claude --name rein:$REIN_SLUG -p /run-rein-task'` (this example pins a `rein:<slug>` name back). Notes:
 
 - The default runs fully autonomously (`--dangerously-skip-permissions`). Claude Code may show a one-time prompt to accept bypass mode, which a detached run can't answer — set `"skipDangerousModePermissionPrompt": true` in `~/.claude/settings.json` to suppress it (if you already use skip-permissions normally, this is likely already set).
 - Prefer a worktree (`rein start … --worktree`) so the autonomous run is isolated; running a branch-only task happens in the main repo and is **not** isolated (rein warns).

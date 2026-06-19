@@ -14,8 +14,13 @@ use std::process::Command;
 /// background session (visible in `claude agents`, attach with `claude attach
 /// <id>`) and returns immediately. Launched via `sh -c`, so it can read the
 /// `REIN_*` env vars rein exports; override with `REIN_RUN_CMD` or git `rein.run`.
+///
+/// No `--name`: Claude Code auto-names the session from the prompt, which reads
+/// better in `claude agents` than a forced `rein:<slug>` label (and rein tracks
+/// the session by its id, not its name). Add `--name` in a custom command to pin
+/// a label of your own.
 const DEFAULT_RUN_CMD: &str =
-    "claude --bg --dangerously-skip-permissions --name rein:$REIN_SLUG /run-rein-task";
+    "claude --bg --dangerously-skip-permissions /run-rein-task";
 
 /// inbox→active claim + optional worktree/branch/draft-PR.
 pub fn start(
