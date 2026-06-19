@@ -90,6 +90,9 @@ end
 local function cleanup()
   local win, buf = state.win, state.buf
   state.win, state.buf, state.job = nil, nil, nil
+  -- drop the global WinClosed focus handler so it doesn't fire editor-wide once
+  -- the float is gone (the buffer-local ones die with the buffer below).
+  pcall(vim.api.nvim_clear_autocmds, { group = "rein_focus" })
   if win and vim.api.nvim_win_is_valid(win) then
     pcall(vim.api.nvim_win_close, win, true)
   end
@@ -122,12 +125,31 @@ end
 
 -- Re-enter terminal mode when our float is the current window. The TUI only
 -- reads keys in terminal mode, so this is what keeps it controllable; the focus
--- autocmd below calls it whenever our window regains focus. Guarded on the
--- current window so it never grabs input while you're working elsewhere.
+-- autocmds below call it whenever our window regains focus. Guarded so it never
+-- grabs input while you work elsewhere (must be the current window) and never
+-- fights a deliberate normal-mode visit (skip when already in terminal mode).
 local function refocus_terminal()
-  if state.win and vim.api.nvim_win_is_valid(state.win) and vim.api.nvim_get_current_win() == state.win then
+  if not (state.win and vim.api.nvim_win_is_valid(state.win)) then
+    return
+  end
+  if vim.api.nvim_get_current_win() ~= state.win then
+    return
+  end
+  if vim.api.nvim_get_mode().mode ~= "t" then
     vim.cmd("startinsert")
   end
+end
+
+-- Re-assert terminal mode now AND again shortly after. When a second floating
+-- terminal (e.g. a claude-code toggle on another key) is closed, it hands focus
+-- back to us via its OWN deferred callbacks — a lone vim.schedule can run before
+-- that plugin's cleanup settles and get reverted to normal mode, which is the
+-- "stuck in normal mode until you press i" bug. The delayed second pass runs
+-- after those callbacks and wins the race; refocus_terminal is idempotent (it
+-- no-ops once we're already in terminal mode), so the double call is harmless.
+local function queue_refocus()
+  vim.schedule(refocus_terminal)
+  vim.defer_fn(refocus_terminal, 40)
 end
 
 local function open()
@@ -159,17 +181,21 @@ local function open()
 
   -- When another floating terminal (e.g. a second toggle-term plugin bound to
   -- its own key) is layered over this float and then closed, nvim hands focus
-  -- back to our window in NORMAL mode — leaving the TUI visible but inert. Re-
-  -- enter terminal mode on every (Win|Buf)Enter into our window so the dashboard
-  -- stays controllable. Buffer-local, so it dies with the buffer on cleanup();
-  -- the group is cleared per open so re-toggling never stacks duplicates.
+  -- back to our window in NORMAL mode — leaving the TUI visible but inert until
+  -- you press `i`. Re-enter terminal mode whenever focus lands on us again. Two
+  -- triggers: a buffer-local (Win|Buf)Enter for the normal focus path, and a
+  -- global WinClosed so closing that overlay reliably refocuses us even if the
+  -- Enter event's timing is swallowed by the other plugin. The group is cleared
+  -- per open (and on cleanup) so re-toggling never stacks duplicate handlers.
   local group = vim.api.nvim_create_augroup("rein_focus", { clear = true })
   vim.api.nvim_create_autocmd({ "WinEnter", "BufEnter" }, {
     group = group,
     buffer = state.buf,
-    callback = function()
-      vim.schedule(refocus_terminal)
-    end,
+    callback = queue_refocus,
+  })
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = group,
+    callback = queue_refocus,
   })
 
   state.job = start_terminal()
