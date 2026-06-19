@@ -107,6 +107,7 @@ pub enum UiAction {
     CreatePr(String, bool), // open a draft PR; bool = worktree (vs main-repo branch)
     CopyDir(PathBuf),       // copy the task's working directory path to the clipboard
     Run(String),            // launch an agent on the task in the background
+    ToggleItem(String, String), // task id + item id: flip its checkbox (reopens a failed item)
 }
 
 /// How `s` claims a task: plain single mode, an isolated worktree, or a
@@ -169,6 +170,13 @@ pub struct App {
     /// fallback target for `new` when no task is selected.
     pub home_store_root: Option<PathBuf>,
     pub home_label: Option<String>,
+    /// True while drilled into the selected task's checklist items: the left
+    /// pane lists the items and the preview shows the selected item's matching
+    /// Agent-Log entries; `space` checks/unchecks the item under the cursor.
+    pub viewing_items: bool,
+    /// Cursor among the focused task's checklist items (only meaningful while
+    /// `viewing_items`).
+    pub item_sel: usize,
 }
 
 impl App {
@@ -198,6 +206,8 @@ impl App {
             project_sel: 0,
             home_store_root: None,
             home_label: None,
+            viewing_items: false,
+            item_sel: 0,
         }
     }
 
@@ -292,6 +302,40 @@ impl App {
         // key press clears it so the keybinding hint comes back — without this a
         // single action would leave "ok" pinned in the status bar forever.
         self.message.clear();
+        // drilled into the selected task's checklist items: j/k pick an item,
+        // space toggles its checkbox, the preview shows its Agent-Log entries.
+        // h/Esc/q step back out to the task list (Ctrl-c still quits).
+        if self.viewing_items {
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                return UiAction::Quit;
+            }
+            let items = self
+                .selected_task()
+                .map(|t| task_items(&t.body))
+                .unwrap_or_default();
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('h') | KeyCode::Char('q') => {
+                    self.viewing_items = false;
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if !items.is_empty() {
+                        self.item_sel = (self.item_sel + 1).min(items.len() - 1);
+                    }
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.item_sel = self.item_sel.saturating_sub(1);
+                }
+                KeyCode::Char(' ') => {
+                    if let Some(it) = items.get(self.item_sel.min(items.len().saturating_sub(1))) {
+                        if let (Some(t), Some(item_id)) = (self.selected_task(), it.id.as_ref()) {
+                            return UiAction::ToggleItem(t.id.clone(), item_id.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return UiAction::None;
+        }
         // text entry for a new task title
         if self.creating {
             match key.code {
@@ -483,6 +527,15 @@ impl App {
                     return UiAction::Edit(t.path.clone());
                 }
             }
+            KeyCode::Char('l') => match self.selected_task() {
+                // drill into the task's checklist items (item list + per-item log)
+                Some(t) if !task_items(&t.body).is_empty() => {
+                    self.viewing_items = true;
+                    self.item_sel = 0;
+                }
+                Some(_) => self.message = "no checklist items in this task".into(),
+                None => self.message = "no task selected".into(),
+            },
             KeyCode::Char('P') => {
                 // open the project level with the cursor on the current scope
                 self.project_sel = match &self.project_scope {
@@ -624,13 +677,100 @@ impl App {
     }
 
     fn render_list(&self, f: &mut Frame, area: Rect) {
-        if self.issuing {
+        if self.viewing_items {
+            self.render_item_list(f, area);
+        } else if self.issuing {
             self.render_issue_picker(f, area);
         } else if self.picking_project {
             self.render_project_picker(f, area);
         } else {
             self.render_task_list(f, area);
         }
+    }
+
+    /// The drilled-in task's checklist items with their checkbox state. The
+    /// cursor (j/k) selects one; its Agent-Log entries fill the preview and
+    /// `space` toggles it. Mirrors the project/issue pickers (replaces the list).
+    fn render_item_list(&self, f: &mut Frame, area: Rect) {
+        let items = self
+            .selected_task()
+            .map(|t| task_items(&t.body))
+            .unwrap_or_default();
+        let title = match self.selected_task() {
+            Some(t) => format!(" items · {} ", t.slug),
+            None => " items ".to_string(),
+        };
+        if items.is_empty() {
+            let p = Paragraph::new("no checklist items")
+                .block(Block::default().borders(Borders::ALL).title(title));
+            f.render_widget(p, area);
+            return;
+        }
+        let sel = self.item_sel.min(items.len() - 1);
+        let list_items: Vec<ListItem> = items
+            .iter()
+            .enumerate()
+            .map(|(row, it)| {
+                let (mark, color) = if it.failed {
+                    ("[✗]", Color::Red)
+                } else if it.checked {
+                    ("[x]", Color::Rgb(0, 128, 0))
+                } else {
+                    ("[ ]", Color::Yellow)
+                };
+                let cursor = if row == sel { "▶ " } else { "  " };
+                let mut text_style = Style::default();
+                if row == sel {
+                    text_style = text_style.add_modifier(Modifier::BOLD);
+                }
+                if it.failed {
+                    text_style = text_style.add_modifier(Modifier::CROSSED_OUT);
+                }
+                ListItem::new(Line::from(vec![
+                    Span::raw(cursor),
+                    Span::styled(format!("{} ", mark), Style::default().fg(color)),
+                    Span::styled(it.text.clone(), text_style),
+                ]))
+            })
+            .collect();
+        let list = List::new(list_items)
+            .block(Block::default().borders(Borders::ALL).title(title));
+        f.render_widget(list, area);
+    }
+
+    /// Preview pane while drilled into items: the Agent-Log entries that
+    /// reference the selected item (by the `Task<id>` convention the run skill
+    /// uses), or a hint when none mention it.
+    fn render_item_log(&self, f: &mut Frame, area: Rect) {
+        let (lines, title) = match self.selected_task() {
+            Some(t) => {
+                let items = task_items(&t.body);
+                if items.is_empty() {
+                    (vec![Line::from("no checklist items")], " log ".to_string())
+                } else {
+                    let it = &items[self.item_sel.min(items.len() - 1)];
+                    let id = it.id.as_deref().unwrap_or("-");
+                    let title = format!(" log · item {} ", id);
+                    let logs = item_log_lines(&t.body, id);
+                    if logs.is_empty() {
+                        (
+                            vec![Line::styled(
+                                format!("no Agent Log entries reference Task{}", id),
+                                Style::default().fg(Color::DarkGray),
+                            )],
+                            title,
+                        )
+                    } else {
+                        (render_markdown(&logs.join("\n")), title)
+                    }
+                }
+            }
+            None => (vec![Line::from("no task selected")], " log ".to_string()),
+        };
+        let p = Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(Block::default().borders(Borders::ALL).title(title));
+        f.render_widget(p, area);
     }
 
     /// The optional issue→project picker: "no project" plus each GitHub Project
@@ -756,6 +896,10 @@ impl App {
     }
 
     fn render_preview(&self, f: &mut Frame, area: Rect) {
+        if self.viewing_items {
+            self.render_item_log(f, area);
+            return;
+        }
         let lines: Vec<Line> = match self.selected_task() {
             Some(t) => render_markdown(&t.body),
             None => vec![Line::from("no task selected")],
@@ -796,6 +940,12 @@ impl App {
                 "PR for {}: [w]orktree [b]ranch · any other key cancels",
                 slug
             )
+        } else if self.viewing_items {
+            let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
+            format!(
+                "items {} · j/k move · space toggle check · h/Esc/q back",
+                slug
+            )
         } else if self.issuing {
             "j/k pick project · Enter file issue · Esc cancel".to_string()
         } else if self.picking_project {
@@ -805,7 +955,7 @@ impl App {
         } else if !self.message.is_empty() {
             self.message.clone()
         } else {
-            "j/k move · Tab status · P project · Enter edit · n new · s start · m move · d done · D delete · x run · i issue · p PR · y copy dir · / filter · q quit"
+            "j/k move · Tab status · P project · Enter edit · l items · n new · s start · m move · d done · D delete · x run · i issue · p PR · y copy dir · / filter · q quit"
                 .to_string()
         };
         // a readable light gray so the hints stand out (the old dark gray was
@@ -943,6 +1093,52 @@ pub fn render_markdown(body: &str) -> Vec<Line<'static>> {
         }
     }
     out
+}
+
+/// Checklist items of a task body, with stable integer IDs assigned in-memory
+/// the same way `assign_ids` persists them — so the id shown in the item view
+/// matches the id a toggle will write back to disk.
+fn task_items(body: &str) -> Vec<crate::task::Item> {
+    let (assigned, _) = crate::task::ensure_item_ids(body);
+    crate::task::scan_items(&assigned)
+}
+
+/// Agent-Log lines that reference the given item id by the `Task<id>` convention
+/// the run skill follows (`- <ts> Task7: …`). Case-insensitive; the id must be a
+/// whole token so `Task1` never picks up a `Task10` entry.
+fn item_log_lines(body: &str, item_id: &str) -> Vec<String> {
+    crate::task::log_section(body)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| log_mentions_item(l, item_id))
+        .map(|l| l.to_string())
+        .collect()
+}
+
+/// Whether `line` mentions `Task<id>` as a standalone token (digits on either
+/// side of the id rule it out, so item `1` and item `10` never cross-match).
+fn log_mentions_item(line: &str, id: &str) -> bool {
+    if id.is_empty() {
+        return false;
+    }
+    let lower = line.to_lowercase();
+    let needle = format!("task{}", id.to_lowercase());
+    let bytes = lower.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find(&needle) {
+        let start = from + rel;
+        let end = start + needle.len();
+        let before_ok = start == 0 || !bytes[start - 1].is_ascii_alphanumeric();
+        let after_ok = lower[end..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_alphanumeric());
+        if before_ok && after_ok {
+            return true;
+        }
+        from = end;
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -1367,11 +1563,45 @@ fn event_loop(
                 }
                 app.tasks = load_all_rows(projects);
             }
+            UiAction::ToggleItem(id, item_id) => {
+                // mutate the doc in place; the item list redraws with the new
+                // checkbox state (its own feedback, so no transient status line)
+                let r = match find_task(projects, &id) {
+                    Some((info, task)) => toggle_item(&info.store, &task, &item_id),
+                    None => Err(anyhow!("task '{}' vanished", id)),
+                };
+                if let Err(e) = r {
+                    app.popup = Some(format!("{:#}", e));
+                    app.popup_error = true;
+                }
+                app.tasks = load_all_rows(projects);
+            }
         }
         // exec verbs print progress to stdout; in raw mode that leaves stray text
         // on the alternate screen, so force a full repaint after each action
         terminal.clear()?;
     }
+}
+
+/// Flip the checked state of a checklist item in its document. IDs are healed
+/// first so the in-UI id (computed the same way) resolves to a real marker on
+/// disk; a resolved-failed item is reopened cleanly rather than left a
+/// half-decorated `- [ ]` with a stale failed sentinel.
+fn toggle_item(store: &Store, task: &TaskRef, item_id: &str) -> Result<()> {
+    let task = crate::commands::assign_ids(store, task)?;
+    let item = crate::task::scan_items(&task.doc.body)
+        .into_iter()
+        .find(|i| i.id.as_deref() == Some(item_id))
+        .ok_or_else(|| anyhow!("item '{}' not found", item_id))?;
+    let new_body = if item.failed {
+        crate::task::clear_failed(&task.doc.body, item_id)?
+    } else {
+        crate::task::set_checked(&task.doc.body, item_id, !item.checked)?
+    };
+    let mut doc = task.doc.clone();
+    doc.body = new_body;
+    doc.touch();
+    store.write_doc(&task.path, &doc)
 }
 
 /// Heal item IDs for a doc just edited in $EDITOR (matches `rein open`).

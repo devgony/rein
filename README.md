@@ -130,6 +130,7 @@ A single dashboard across all your projects. Launched inside a repo, it pre-scop
 | `Tab`   | cycle status (all/inbox/active/done/canceled) |
 | `P`     | pick project (project > task hierarchy)       |
 | `Enter` | edit in `$EDITOR`                             |
+| `l`     | drill into the task's checklist items (item list + per-item Agent Log; `space` checks/unchecks, `h`/`Esc`/`q` back) |
 | `n`     | new task                                      |
 | `s`     | start (inbox → active) → `s` single / `w` worktree / `b` branch |
 | `m`     | move to any state (i/a/d/c)                   |
@@ -143,6 +144,8 @@ A single dashboard across all your projects. Launched inside a repo, it pre-scop
 | `q`     | quit                                          |
 
 Editing is always delegated to `$EDITOR` — there is no built-in Markdown editor in the TUI.
+
+Press `l` to **drill into a task's checklist items**: the left pane lists each item with its checkbox state (green done, yellow open, red struck-through failed), the preview shows the Agent-Log entries that reference the selected item (matched by the `Task<id>` convention the run skill follows), and `space` checks/unchecks the item under the cursor (a failed item is reopened). `h`/`Esc`/`q` steps back to the task list.
 
 Failed items (resolved via `rein fail`) render in red and struck through in the preview, distinct from green done and yellow open.
 

@@ -693,3 +693,115 @@ fn failed_items_render_red_and_struck() {
     let open = lines.iter().find(|l| text(l).contains("open")).unwrap();
     assert_eq!(open.style.fg, Some(Color::Yellow));
 }
+
+/// A single-task app whose body is exactly `body` (for item-view tests).
+fn one_row(body: &str) -> App {
+    let row = TaskRow {
+        id: "task-20260613-demo".into(),
+        slug: "demo".into(),
+        title: "Demo".into(),
+        status: Status::Active,
+        path: PathBuf::from("/store/active/demo.md"),
+        body: body.to_string(),
+        branch: None,
+        github_issue: None,
+        github_pr: None,
+        created_at: String::new(),
+        updated_at: String::new(),
+        tags: Vec::new(),
+        shared: false,
+        project: String::new(),
+        store_root: PathBuf::from("/store"),
+        run_state: None,
+        worktree: None,
+        repo_dir: None,
+    };
+    App::new(vec![row])
+}
+
+#[test]
+fn l_drills_into_the_task_item_list() {
+    // the first task (settings-cleanup) has two checklist items
+    let mut app = App::new(rows());
+    assert_eq!(key(&mut app, KeyCode::Char('l')), UiAction::None);
+    assert!(app.viewing_items);
+    let screen = draw(&app);
+    // left pane now lists the items with their checkbox state
+    assert!(screen.contains("items · settings-cleanup"));
+    assert!(screen.contains("Layout"));
+    assert!(screen.contains("Toast"));
+    assert!(screen.contains("[ ]"), "an open item shows an empty box");
+    assert!(screen.contains("[x]"), "a done item shows a checked box");
+    // the status line advertises the item-view shortcuts
+    assert!(screen.contains("space toggle check"));
+    assert!(screen.contains("h/Esc/q back"));
+}
+
+#[test]
+fn l_is_refused_when_the_task_has_no_items() {
+    // auth-refactor has only a Goal — nothing to drill into
+    let mut app = App::new(rows());
+    key(&mut app, KeyCode::Char('j'));
+    assert_eq!(app.selected_task().unwrap().slug, "auth-refactor");
+    assert_eq!(key(&mut app, KeyCode::Char('l')), UiAction::None);
+    assert!(!app.viewing_items);
+    assert!(app.message.contains("no checklist items"));
+}
+
+#[test]
+fn space_toggles_the_selected_item() {
+    // drill in, then space emits a toggle for the item under the cursor
+    let mut app = App::new(rows());
+    key(&mut app, KeyCode::Char('l'));
+    assert_eq!(
+        key(&mut app, KeyCode::Char(' ')),
+        UiAction::ToggleItem("task-20260613-settings-cleanup".into(), "layout".into())
+    );
+    // j moves to the second item; space toggles that one
+    key(&mut app, KeyCode::Char('j'));
+    assert_eq!(
+        key(&mut app, KeyCode::Char(' ')),
+        UiAction::ToggleItem("task-20260613-settings-cleanup".into(), "toast".into())
+    );
+}
+
+#[test]
+fn h_esc_and_q_step_back_out_of_item_view() {
+    for back in [KeyCode::Char('h'), KeyCode::Esc, KeyCode::Char('q')] {
+        let mut app = App::new(rows());
+        key(&mut app, KeyCode::Char('l'));
+        assert!(app.viewing_items);
+        assert_eq!(key(&mut app, back), UiAction::None);
+        assert!(!app.viewing_items, "{:?} should leave item view", back);
+    }
+}
+
+#[test]
+fn item_view_shows_only_the_selected_items_log() {
+    // each item's log is matched by the `Task<id>` convention; Task1 must not
+    // pick up the Task10 entry (whole-token match)
+    let body = "## Tasks\n\n- [ ] <!-- task:1 --> First\n- [ ] <!-- task:2 --> Second\n\n## Agent Log\n\n<!-- append-only -->\n- 2026-06-20 Task1: wired the first thing\n- 2026-06-20 Task2: wired the second thing\n- 2026-06-20 Task10: an unrelated big item";
+    let mut app = one_row(body);
+    key(&mut app, KeyCode::Char('l'));
+    // item 1 selected: only its entry shows
+    let screen = draw(&app);
+    assert!(screen.contains("log · item 1"));
+    assert!(screen.contains("wired the first thing"));
+    assert!(!screen.contains("wired the second thing"));
+    assert!(!screen.contains("unrelated big item"));
+    // j to item 2: its entry replaces the first
+    key(&mut app, KeyCode::Char('j'));
+    let screen = draw(&app);
+    assert!(screen.contains("log · item 2"));
+    assert!(screen.contains("wired the second thing"));
+    assert!(!screen.contains("wired the first thing"));
+}
+
+#[test]
+fn item_view_notes_when_no_log_references_the_item() {
+    let body = "## Tasks\n\n- [ ] <!-- task:1 --> Lonely\n\n## Agent Log\n\n<!-- append-only -->";
+    let mut app = one_row(body);
+    key(&mut app, KeyCode::Char('l'));
+    let screen = draw(&app);
+    assert!(screen.contains("no Agent Log entries reference Task1"));
+}
