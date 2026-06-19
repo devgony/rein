@@ -152,6 +152,39 @@ local function queue_refocus()
   vim.defer_fn(refocus_terminal, 40)
 end
 
+-- Force the rein TUI to fully repaint. When an overlay float is closed, nvim can
+-- leave our covered terminal's grid left-shifted (borders + the ▶ marker clipped
+-- off the left), and a diff-rendering TUI won't fix it on its own — nor does it
+-- always receive a focus/resize event to react to. So nudge the window width by
+-- one column and restore it on the next tick: that resizes the PTY twice, the
+-- child gets real resize events, and ratatui redraws every cell at the correct
+-- width. Only runs when our float is the current window, so it stays a no-op
+-- (and flicker-free) for unrelated window closes.
+local function repaint_float()
+  if not (state.win and vim.api.nvim_win_is_valid(state.win)) then
+    return
+  end
+  if vim.api.nvim_get_current_win() ~= state.win then
+    return
+  end
+  local ok, cfg = pcall(vim.api.nvim_win_get_config, state.win)
+  if not ok or type(cfg.width) ~= "number" or cfg.width <= 2 then
+    return
+  end
+  local full = cfg.width
+  cfg.width = full - 1
+  pcall(vim.api.nvim_win_set_config, state.win, cfg)
+  vim.schedule(function()
+    if state.win and vim.api.nvim_win_is_valid(state.win) then
+      local ok2, c2 = pcall(vim.api.nvim_win_get_config, state.win)
+      if ok2 then
+        c2.width = full
+        pcall(vim.api.nvim_win_set_config, state.win, c2)
+      end
+    end
+  end)
+end
+
 local function open()
   local cols, rows = vim.o.columns, vim.o.lines
   local w, h = dim(config.width, cols), dim(config.height, rows)
@@ -181,12 +214,12 @@ local function open()
 
   -- When another floating terminal (e.g. a second toggle-term plugin bound to
   -- its own key) is layered over this float and then closed, nvim hands focus
-  -- back to our window in NORMAL mode — leaving the TUI visible but inert until
-  -- you press `i`. Re-enter terminal mode whenever focus lands on us again. Two
-  -- triggers: a buffer-local (Win|Buf)Enter for the normal focus path, and a
-  -- global WinClosed so closing that overlay reliably refocuses us even if the
-  -- Enter event's timing is swallowed by the other plugin. The group is cleared
-  -- per open (and on cleanup) so re-toggling never stacks duplicate handlers.
+  -- back to our window in NORMAL mode (TUI visible but inert until you press
+  -- `i`) AND can leave its grid left-shifted (borders + ▶ marker clipped). Two
+  -- triggers heal both: a buffer-local (Win|Buf)Enter re-enters terminal mode on
+  -- any focus return, and a global WinClosed re-enters terminal mode + forces a
+  -- full repaint when that overlay closes. The group is cleared per open (and on
+  -- cleanup) so re-toggling never stacks duplicate handlers.
   local group = vim.api.nvim_create_augroup("rein_focus", { clear = true })
   vim.api.nvim_create_autocmd({ "WinEnter", "BufEnter" }, {
     group = group,
@@ -195,7 +228,10 @@ local function open()
   })
   vim.api.nvim_create_autocmd("WinClosed", {
     group = group,
-    callback = queue_refocus,
+    callback = function()
+      queue_refocus()
+      vim.schedule(repaint_float)
+    end,
   })
 
   state.job = start_terminal()
