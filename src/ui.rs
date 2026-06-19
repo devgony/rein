@@ -2,7 +2,10 @@ use crate::gitx::Repo;
 use crate::store::{Status, Store, StoreInfo, TaskRef};
 use crate::Ctx;
 use anyhow::{anyhow, Context, Result};
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, DisableFocusChange, EnableFocusChange, Event, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers,
+};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
@@ -1122,11 +1125,16 @@ pub fn run() -> Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    // EnableFocusChange asks the terminal to report focus in/out. nvim forwards
+    // these to a terminal buffer, so when another float (e.g. a claude-code
+    // toggle) is layered over our window and then closed, we get a FocusGained
+    // and force a full repaint — fixing the stale/left-shifted grid that hides
+    // the borders and the ▶ marker.
+    execute!(stdout, EnterAlternateScreen, EnableFocusChange)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
     let result = event_loop(&mut terminal, &mut app, &projects);
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), DisableFocusChange, LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     result
 }
@@ -1168,10 +1176,19 @@ fn event_loop(
             continue;
         }
         idle_ticks = 0;
-        let Event::Key(key) = event::read()? else {
-            continue;
+        let action = match event::read()? {
+            Event::Key(key) => app.on_key(key),
+            // Regaining focus or a resize can leave a stale/left-shifted grid
+            // when another float was layered over us and closed; ratatui only
+            // diff-renders, so force a full repaint to restore the borders + ▶
+            // marker. (autoresize alone won't help: if the size ends unchanged
+            // it thinks the screen already matches.)
+            Event::FocusGained | Event::Resize(_, _) => {
+                terminal.clear()?;
+                continue;
+            }
+            _ => continue,
         };
-        let action = app.on_key(key);
         // no-op keys (navigation, typing) just update state → redraw next loop
         if action == UiAction::None {
             continue;
