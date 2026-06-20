@@ -187,7 +187,7 @@ Hacking on rein itself? Point at the working tree instead of GitHub, and set `de
 
 `dev = true` auto-detects the repo from the plugin's own location; pass a path (`dev = "/path/to/rein"`) to point elsewhere. `:lua =require("rein").command()` prints exactly what will run.
 
-Usage: `<M-r>` (or `:Rein`) opens the dashboard centered as a 95% × 95% float and **closes it again from inside the TUI** — one key, both ways. You can also quit the TUI with its own `q`. Failed items show in red (struck through). Set `keymap = false` to skip the built-in mapping and wire your own key to `:Rein` (give it `mode = { "n", "t" }` so it toggles out from terminal mode too).
+Usage: `<M-r>` (or `:Rein`) opens the dashboard centered as a 95% × 95% float and **hides it again from inside the TUI** — one key, both ways. Toggling off only hides the float: the `rein ui` session stays alive in the background, so the next `<M-r>` **re-shows the same session** (your selected task, item drill-down, and filters are preserved) instead of launching a fresh one. The session ends only when you quit the TUI with its own `q` — after that, the next toggle starts fresh. Failed items show in red (struck through). Set `keymap = false` to skip the built-in mapping and wire your own key to `:Rein` (give it `mode = { "n", "t" }` so it toggles out from terminal mode too).
 
 Options (`opts = { ... }`, defaults shown):
 

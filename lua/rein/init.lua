@@ -4,7 +4,9 @@
 --   { "devgony/rein", cmd = "Rein", keys = { "<M-r>" }, opts = { keymap = "<M-r>" } }
 --
 -- <M-r> (or :Rein) toggles the dashboard as a centered float — and the same key
--- closes it from inside the TUI. Set opts.dev = true (or a repo path) to launch
+-- hides it from inside the TUI. Toggling off keeps the `rein ui` session alive
+-- (hidden), so the next toggle re-shows the same session; it ends only when you
+-- quit the TUI with its own `q`. Set opts.dev = true (or a repo path) to launch
 -- from source via `cargo run` while hacking on rein itself.
 
 local M = {}
@@ -84,6 +86,21 @@ function M.is_open()
   return state.win ~= nil and vim.api.nvim_win_is_valid(state.win)
 end
 
+-- Whether a kept-alive (hidden) `rein ui` session exists and is still running,
+-- so the next toggle can re-show it instead of launching fresh. Checks both that
+-- the terminal buffer survives and that its job hasn't exited (jobwait with a 0
+-- timeout returns -1 while the job is still alive).
+local function session_alive()
+  if not (state.buf and vim.api.nvim_buf_is_valid(state.buf)) then
+    return false
+  end
+  if not state.job then
+    return false
+  end
+  local ok, res = pcall(vim.fn.jobwait, { state.job }, 0)
+  return ok and res ~= nil and res[1] == -1
+end
+
 -- Fully tear down the float + terminal. State is nilled first so the jobstart
 -- on_exit callback (which fires while we force-delete the terminal buffer) just
 -- re-enters as a no-op instead of double-closing.
@@ -101,12 +118,27 @@ local function cleanup()
   end
 end
 
--- Closing ends the session (kills the TUI + buffer). Each open then starts a
--- fresh `rein ui`. Reusing a hidden terminal buffer instead made nvim reflow it
--- on the next show, shaving the border's worth of leading columns off the left
--- pane on every toggle; the dashboard is stateless, so a fresh start is free.
+-- Full teardown — kills the TUI + buffer, ending the session. Used when the TUI
+-- exits on its own (its `q`, via on_exit). The toggle path uses M.hide instead,
+-- which keeps the session alive for a later re-show.
 function M.close()
   cleanup()
+end
+
+-- Toggle-off: close the float window but KEEP the terminal buffer and its live
+-- `rein ui` session (the buffer is `bufhidden = "hide"`), so the next toggle
+-- re-shows the same session — preserving the selected task, item drill-down, and
+-- filters. Earlier this killed the session and re-launched fresh each time; the
+-- left-pane reflow that motivated that is now healed by repaint_float on re-show.
+function M.hide()
+  local win = state.win
+  state.win = nil
+  -- drop the global WinClosed handler before we close, so our own close doesn't
+  -- trigger a refocus/repaint and it can't fire editor-wide while we're hidden.
+  pcall(vim.api.nvim_clear_autocmds, { group = "rein_focus" })
+  if win and vim.api.nvim_win_is_valid(win) then
+    pcall(vim.api.nvim_win_close, win, true)
+  end
 end
 
 -- Fires when the TUI exits on its own (its `q`); schedule so the buffer/window
@@ -185,23 +217,16 @@ local function repaint_float()
   end)
 end
 
-local function open()
+-- Open the centered float over `buf` and wire the focus/repaint autocmds that
+-- keep us controllable when an overlay closes over us. Shared by a fresh start
+-- (open) and a re-show of a kept-alive session (M.show). Leaves entering
+-- terminal mode to the caller (the fresh path must start the job first).
+local function build_float(buf)
   local cols, rows = vim.o.columns, vim.o.lines
   local w, h = dim(config.width, cols), dim(config.height, rows)
 
-  state.buf = vim.api.nvim_create_buf(false, true)
-  -- the TUI grabs all input while focused (terminal mode), so the normal-mode
-  -- toggle can't fire from inside it; a buffer-local terminal-mode mapping on
-  -- the same key closes the float so the one key toggles both ways.
-  if config.keymap then
-    vim.keymap.set("t", config.keymap, M.toggle, {
-      buffer = state.buf,
-      desc = "Toggle rein UI",
-      silent = true,
-    })
-  end
-
-  state.win = vim.api.nvim_open_win(state.buf, true, {
+  state.buf = buf
+  state.win = vim.api.nvim_open_win(buf, true, {
     relative = "editor",
     width = w,
     height = h,
@@ -219,11 +244,11 @@ local function open()
   -- triggers heal both: a buffer-local (Win|Buf)Enter re-enters terminal mode on
   -- any focus return, and a global WinClosed re-enters terminal mode + forces a
   -- full repaint when that overlay closes. The group is cleared per open (and on
-  -- cleanup) so re-toggling never stacks duplicate handlers.
+  -- hide/cleanup) so re-toggling never stacks duplicate handlers.
   local group = vim.api.nvim_create_augroup("rein_focus", { clear = true })
   vim.api.nvim_create_autocmd({ "WinEnter", "BufEnter" }, {
     group = group,
-    buffer = state.buf,
+    buffer = buf,
     callback = queue_refocus,
   })
   vim.api.nvim_create_autocmd("WinClosed", {
@@ -233,14 +258,46 @@ local function open()
       vim.schedule(repaint_float)
     end,
   })
+end
 
+-- Fresh start: a new terminal buffer running `rein ui`. The TUI grabs all input
+-- while focused (terminal mode), so the normal-mode toggle can't fire from
+-- inside it; a buffer-local terminal-mode mapping on the same key toggles the
+-- float so the one key works both ways.
+local function open()
+  local buf = vim.api.nvim_create_buf(false, true)
+  if config.keymap then
+    vim.keymap.set("t", config.keymap, M.toggle, {
+      buffer = buf,
+      desc = "Toggle rein UI",
+      silent = true,
+    })
+  end
+  build_float(buf)
   state.job = start_terminal()
+  -- keep the terminal buffer + its live session when the window is hidden on
+  -- toggle-off (instead of wiping it), so re-toggling re-shows the same session.
+  vim.bo[buf].bufhidden = "hide"
   vim.cmd("startinsert")
+end
+
+-- Re-show a kept-alive (hidden) session in a fresh float. nvim can leave the
+-- re-shown terminal's grid stale/left-shifted, so re-assert terminal mode and
+-- force a full repaint (the width round-trip) once it is back on screen.
+function M.show()
+  build_float(state.buf)
+  queue_refocus()
+  vim.schedule(repaint_float)
 end
 
 function M.toggle()
   if M.is_open() then
-    M.close()
+    M.hide()
+    return
+  end
+  -- a previous toggle-off left the session hidden but alive → re-show it
+  if session_alive() then
+    M.show()
     return
   end
   local exe = M.command()[1]
