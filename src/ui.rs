@@ -109,6 +109,8 @@ pub enum UiAction {
     Run(String),            // launch an agent on the task in the background
     ToggleItem(String, String), // task id + item id: flip its checkbox (reopens a failed item)
     AddItem(String, String),    // task id + text: append a new checklist item to ## Tasks
+    EditItem(String, String, String), // task id + item id + new text: reword a checklist item
+    DeleteItem(String, String), // task id + item id: remove a checklist item
 }
 
 /// How `s` claims a task: plain single mode, an isolated worktree, or a
@@ -181,6 +183,12 @@ pub struct App {
     /// True while typing a new checklist item in the item view (a sub-mode of
     /// `viewing_items`); the text accumulates in `input`.
     pub creating_item: bool,
+    /// True while editing the selected checklist item's text (a sub-mode of
+    /// `viewing_items`, prefilled into `input`).
+    pub editing_item: bool,
+    /// True while awaiting the item-delete confirmation key (`y` confirms; any
+    /// other key cancels) in the item view.
+    pub deleting_item: bool,
 }
 
 impl App {
@@ -213,6 +221,8 @@ impl App {
             viewing_items: false,
             item_sel: 0,
             creating_item: false,
+            editing_item: false,
+            deleting_item: false,
         }
     }
 
@@ -337,6 +347,54 @@ impl App {
                 }
                 return UiAction::None;
             }
+            // text entry for editing the selected item (prefilled with its text):
+            // Enter saves the reworded text, Esc cancels.
+            if self.editing_item {
+                match key.code {
+                    KeyCode::Esc => {
+                        self.editing_item = false;
+                        self.input.clear();
+                    }
+                    KeyCode::Enter => {
+                        self.editing_item = false;
+                        let text = self.input.trim().to_string();
+                        self.input.clear();
+                        if !text.is_empty() {
+                            let items = self
+                                .selected_task()
+                                .map(|t| task_items(&t.body))
+                                .unwrap_or_default();
+                            if let Some(it) = items.get(self.item_sel.min(items.len().saturating_sub(1))) {
+                                if let (Some(t), Some(item_id)) = (self.selected_task(), it.id.as_ref()) {
+                                    return UiAction::EditItem(t.id.clone(), item_id.clone(), text);
+                                }
+                            }
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        self.input.pop();
+                    }
+                    KeyCode::Char(c) => self.input.push(c),
+                    _ => {}
+                }
+                return UiAction::None;
+            }
+            // confirm a checklist-item delete: only `y` proceeds; else cancel
+            if self.deleting_item {
+                self.deleting_item = false;
+                if matches!(key.code, KeyCode::Char('y')) {
+                    let items = self
+                        .selected_task()
+                        .map(|t| task_items(&t.body))
+                        .unwrap_or_default();
+                    if let Some(it) = items.get(self.item_sel.min(items.len().saturating_sub(1))) {
+                        if let (Some(t), Some(item_id)) = (self.selected_task(), it.id.as_ref()) {
+                            return UiAction::DeleteItem(t.id.clone(), item_id.clone());
+                        }
+                    }
+                }
+                return UiAction::None;
+            }
             if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
                 return UiAction::Quit;
             }
@@ -348,6 +406,8 @@ impl App {
                 KeyCode::Esc | KeyCode::Char('h') | KeyCode::Char('q') => {
                     self.viewing_items = false;
                     self.creating_item = false;
+                    self.editing_item = false;
+                    self.deleting_item = false;
                     self.input.clear();
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
@@ -369,6 +429,19 @@ impl App {
                 KeyCode::Char('n') => {
                     self.creating_item = true;
                     self.input.clear();
+                }
+                // edit the selected item's text (prefilled into the entry)
+                KeyCode::Char('e') => {
+                    if let Some(it) = items.get(self.item_sel.min(items.len().saturating_sub(1))) {
+                        self.editing_item = true;
+                        self.input = it.text.clone();
+                    }
+                }
+                // delete the selected item (confirm with y)
+                KeyCode::Char('d') => {
+                    if !items.is_empty() {
+                        self.deleting_item = true;
+                    }
                 }
                 _ => {}
             }
@@ -952,6 +1025,12 @@ impl App {
         let text = if self.creating_item {
             let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
             format!("new item [{}]: {} · Enter add · Esc cancel", slug, self.input)
+        } else if self.editing_item {
+            let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
+            format!("edit item [{}]: {} · Enter save · Esc cancel", slug, self.input)
+        } else if self.deleting_item {
+            let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
+            format!("delete item from {}? [y]es · any other key cancels", slug)
         } else if self.creating {
             let proj = self
                 .selected_task()
@@ -984,7 +1063,7 @@ impl App {
         } else if self.viewing_items {
             let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
             format!(
-                "items {} · j/k move · space toggle check · n new · h/Esc/q back",
+                "items {} · j/k move · space toggle · n new · e edit · d delete · h/Esc/q back",
                 slug
             )
         } else if self.issuing {
@@ -1636,6 +1715,34 @@ fn event_loop(
                     app.item_sel = n - 1;
                 }
             }
+            UiAction::EditItem(id, item_id, text) => {
+                let r = match find_task(projects, &id) {
+                    Some((info, task)) => edit_item(&info.store, &task, &item_id, &text),
+                    None => Err(anyhow!("task '{}' vanished", id)),
+                };
+                if let Err(e) = r {
+                    app.popup = Some(format!("{:#}", e));
+                    app.popup_error = true;
+                }
+                app.tasks = load_all_rows(projects);
+            }
+            UiAction::DeleteItem(id, item_id) => {
+                let r = match find_task(projects, &id) {
+                    Some((info, task)) => delete_item(&info.store, &task, &item_id),
+                    None => Err(anyhow!("task '{}' vanished", id)),
+                };
+                if let Err(e) = r {
+                    app.popup = Some(format!("{:#}", e));
+                    app.popup_error = true;
+                }
+                app.tasks = load_all_rows(projects);
+                // the deleted item is gone; clamp the cursor to the new list
+                let n = app
+                    .selected_task()
+                    .map(|t| task_items(&t.body).len())
+                    .unwrap_or(0);
+                app.item_sel = app.item_sel.min(n.saturating_sub(1));
+            }
         }
         // exec verbs print progress to stdout; in raw mode that leaves stray text
         // on the alternate screen, so force a full repaint after each action
@@ -1678,6 +1785,29 @@ fn add_item(store: &Store, task: &TaskRef, text: &str) -> Result<()> {
         crate::commands::assign_ids(store, &fresh)?;
     }
     Ok(())
+}
+
+/// Replace a checklist item's text in its document. IDs are healed first so the
+/// in-UI id (computed the same way) resolves to a real marker on disk (mirrors
+/// `toggle_item`).
+fn edit_item(store: &Store, task: &TaskRef, item_id: &str, text: &str) -> Result<()> {
+    let task = crate::commands::assign_ids(store, task)?;
+    let body = crate::task::edit_item(&task.doc.body, item_id, text)?;
+    let mut doc = task.doc.clone();
+    doc.body = body;
+    doc.touch();
+    store.write_doc(&task.path, &doc)
+}
+
+/// Remove a checklist item from its document. IDs are healed first so the in-UI
+/// id resolves to a real marker on disk (mirrors `toggle_item`).
+fn delete_item(store: &Store, task: &TaskRef, item_id: &str) -> Result<()> {
+    let task = crate::commands::assign_ids(store, task)?;
+    let body = crate::task::delete_item(&task.doc.body, item_id)?;
+    let mut doc = task.doc.clone();
+    doc.body = body;
+    doc.touch();
+    store.write_doc(&task.path, &doc)
 }
 
 /// Heal item IDs for a doc just edited in $EDITOR (matches `rein open`).

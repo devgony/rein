@@ -733,7 +733,9 @@ fn l_drills_into_the_task_item_list() {
     assert!(screen.contains("[ ]"), "an open item shows an empty box");
     assert!(screen.contains("[x]"), "a done item shows a checked box");
     // the status line advertises the item-view shortcuts
-    assert!(screen.contains("space toggle check"));
+    assert!(screen.contains("space toggle"));
+    assert!(screen.contains("e edit"));
+    assert!(screen.contains("d delete"));
     assert!(screen.contains("h/Esc/q back"));
 }
 
@@ -820,6 +822,85 @@ fn item_view_hint_advertises_new() {
     key(&mut app, KeyCode::Char('l'));
     let screen = draw(&app);
     assert!(screen.contains("n new"));
+}
+
+#[test]
+fn e_in_item_view_edits_the_selected_item() {
+    let mut app = App::new(rows());
+    key(&mut app, KeyCode::Char('l')); // drill into settings-cleanup's items
+    // e opens the editor prefilled with the current item text
+    assert_eq!(key(&mut app, KeyCode::Char('e')), UiAction::None);
+    assert!(app.editing_item);
+    assert_eq!(app.input, "Layout");
+    let screen = draw(&app);
+    assert!(screen.contains("edit item"));
+    // clear the buffer and type a replacement
+    for _ in 0.."Layout".len() {
+        key(&mut app, KeyCode::Backspace);
+    }
+    for c in "Relayout".chars() {
+        key(&mut app, KeyCode::Char(c));
+    }
+    // Enter emits EditItem for the focused task + item with the new text
+    assert_eq!(
+        key(&mut app, KeyCode::Enter),
+        UiAction::EditItem(
+            "task-20260613-settings-cleanup".into(),
+            "layout".into(),
+            "Relayout".into()
+        )
+    );
+    assert!(!app.editing_item);
+}
+
+#[test]
+fn esc_cancels_item_edit_and_empty_edit_is_a_noop() {
+    let mut app = App::new(rows());
+    key(&mut app, KeyCode::Char('l'));
+    key(&mut app, KeyCode::Char('e'));
+    assert!(app.editing_item);
+    // Esc cancels the edit and stays in the item view
+    assert_eq!(key(&mut app, KeyCode::Esc), UiAction::None);
+    assert!(!app.editing_item);
+    assert!(app.viewing_items);
+    assert!(app.input.is_empty());
+    // clearing the text and pressing Enter edits nothing
+    key(&mut app, KeyCode::Char('e'));
+    for _ in 0.."Layout".len() {
+        key(&mut app, KeyCode::Backspace);
+    }
+    assert_eq!(key(&mut app, KeyCode::Enter), UiAction::None);
+    assert!(!app.editing_item);
+}
+
+#[test]
+fn d_in_item_view_confirms_then_deletes_the_item() {
+    let mut app = App::new(rows());
+    key(&mut app, KeyCode::Char('l'));
+    // d opens a confirmation; only y proceeds to the delete action
+    assert_eq!(key(&mut app, KeyCode::Char('d')), UiAction::None);
+    assert!(app.deleting_item);
+    let screen = draw(&app);
+    assert!(screen.contains("delete item from settings-cleanup?"));
+    assert_eq!(
+        key(&mut app, KeyCode::Char('y')),
+        UiAction::DeleteItem("task-20260613-settings-cleanup".into(), "layout".into())
+    );
+    assert!(!app.deleting_item);
+
+    // any other key cancels without deleting
+    let mut app = App::new(rows());
+    key(&mut app, KeyCode::Char('l'));
+    key(&mut app, KeyCode::Char('d'));
+    assert_eq!(key(&mut app, KeyCode::Char('n')), UiAction::None);
+    assert!(!app.deleting_item);
+    // j moves to the second item; d then y deletes that one
+    key(&mut app, KeyCode::Char('j'));
+    key(&mut app, KeyCode::Char('d'));
+    assert_eq!(
+        key(&mut app, KeyCode::Char('y')),
+        UiAction::DeleteItem("task-20260613-settings-cleanup".into(), "toast".into())
+    );
 }
 
 #[test]

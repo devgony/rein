@@ -296,6 +296,70 @@ pub fn append_item(body: &str, text: &str) -> Result<String> {
     Ok(lines.join("\n") + "\n")
 }
 
+/// Replace the text of a checklist item, preserving its checkbox state and id
+/// marker. A failed item keeps its `~~strikethrough~~ ❌` decorations around the
+/// new text so the failure stays visible. Empty replacement text is rejected.
+pub fn edit_item(body: &str, item_id: &str, new_text: &str) -> Result<String> {
+    let new_text = new_text.trim();
+    if new_text.is_empty() {
+        bail!("item text is empty");
+    }
+    let marker = format!("<!-- task:{} -->", item_id);
+    let mut lines: Vec<String> = body.lines().map(|l| l.to_string()).collect();
+    let mut found = false;
+    for line in lines.iter_mut() {
+        let Some((checked, after)) = checkbox_prefix(line) else {
+            continue;
+        };
+        if !line.contains(&marker) {
+            continue;
+        }
+        let indent_len = line.len() - line.trim_start().len();
+        let indent = line[..indent_len].to_string();
+        let rest = &line[after..];
+        let raw_text = match rest.find("-->") {
+            Some(p) => rest[p + 3..].trim().to_string(),
+            None => rest.trim().to_string(),
+        };
+        let (was_failed, _) = decode_failed(&raw_text);
+        *line = if was_failed {
+            // a failed item is always a checked box; keep it struck + marked
+            format!(
+                "{}- [x] {} {} ~~{}~~ {}",
+                indent, marker, FAILED_SENTINEL, new_text, FAIL_MARK
+            )
+        } else {
+            let box_str = if checked { "- [x]" } else { "- [ ]" };
+            format!("{}{} {} {}", indent, box_str, marker, new_text)
+        };
+        found = true;
+        break;
+    }
+    if !found {
+        bail!("item '{}' not found", item_id);
+    }
+    Ok(lines.join("\n") + "\n")
+}
+
+/// Remove a checklist item's line by id. Errors if no item carries that id.
+pub fn delete_item(body: &str, item_id: &str) -> Result<String> {
+    let marker = format!("<!-- task:{} -->", item_id);
+    let lines: Vec<&str> = body.lines().collect();
+    let Some(pos) = lines
+        .iter()
+        .position(|l| l.contains(&marker) && checkbox_prefix(l).is_some())
+    else {
+        bail!("item '{}' not found", item_id);
+    };
+    let kept: Vec<&str> = lines
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != pos)
+        .map(|(_, l)| *l)
+        .collect();
+    Ok(kept.join("\n") + "\n")
+}
+
 /// Split a failed item's decorations off its text. A failed item carries the
 /// `FAILED_SENTINEL` comment, its text wrapped in `~~strikethrough~~`, and a
 /// trailing `FAIL_MARK`. Returns `(was_failed, clean_text)`; decorations are
@@ -602,6 +666,51 @@ mod tests {
         let items = scan_items(&out);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].text, "First item");
+    }
+
+    #[test]
+    fn edit_item_replaces_text_keeping_state_and_id() {
+        let doc = sample(); // item "one" open: "First thing"
+        // edit an open item: text changes, box + id marker preserved
+        let body = edit_item(&doc.body, "one", "Reworded thing").unwrap();
+        assert!(body.contains("- [ ] <!-- task:one --> Reworded thing"));
+        let it = scan_items(&body)
+            .into_iter()
+            .find(|i| i.id.as_deref() == Some("one"))
+            .unwrap();
+        assert!(!it.checked && !it.failed);
+        assert_eq!(it.text, "Reworded thing");
+        // editing a checked item keeps it checked
+        let checked = set_checked(&doc.body, "one", true).unwrap();
+        let body = edit_item(&checked, "one", "Still done").unwrap();
+        assert!(body.contains("- [x] <!-- task:one --> Still done"));
+        // editing a failed item keeps the strikethrough + ❌
+        let failed = set_failed(&doc.body, "one").unwrap();
+        let body = edit_item(&failed, "one", "Nope but reworded").unwrap();
+        assert!(body.contains("~~Nope but reworded~~"));
+        let it = scan_items(&body)
+            .into_iter()
+            .find(|i| i.id.as_deref() == Some("one"))
+            .unwrap();
+        assert!(it.failed);
+        assert_eq!(it.text, "Nope but reworded");
+        // empty text and unknown id are errors
+        assert!(edit_item(&doc.body, "one", "   ").is_err());
+        assert!(edit_item(&doc.body, "nope", "x").is_err());
+    }
+
+    #[test]
+    fn delete_item_removes_the_line() {
+        let mut doc = sample(); // item "one" + an unnumbered "Second thing"
+        let (with_ids, _) = ensure_item_ids(&doc.body);
+        doc.body = with_ids; // "Second thing" → task:1
+        assert_eq!(scan_items(&doc.body).len(), 2);
+        let body = delete_item(&doc.body, "one").unwrap();
+        let items = scan_items(&body);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].text, "Second thing");
+        // deleting a missing id is an error
+        assert!(delete_item(&body, "one").is_err());
     }
 
     #[test]
