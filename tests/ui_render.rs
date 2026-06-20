@@ -777,6 +777,52 @@ fn h_esc_and_q_step_back_out_of_item_view() {
 }
 
 #[test]
+fn n_in_item_view_creates_a_new_item() {
+    let mut app = App::new(rows());
+    key(&mut app, KeyCode::Char('l')); // drill into settings-cleanup's items
+    assert!(app.viewing_items);
+    // n opens the new-item entry; typing accumulates into the input
+    assert_eq!(key(&mut app, KeyCode::Char('n')), UiAction::None);
+    assert!(app.creating_item);
+    for c in "Wire it".chars() {
+        key(&mut app, KeyCode::Char(c));
+    }
+    let screen = draw(&app);
+    assert!(screen.contains("new item"));
+    assert!(screen.contains("Wire it"));
+    // Enter emits AddItem for the focused task with the typed text
+    assert_eq!(
+        key(&mut app, KeyCode::Enter),
+        UiAction::AddItem("task-20260613-settings-cleanup".into(), "Wire it".into())
+    );
+    assert!(!app.creating_item);
+}
+
+#[test]
+fn esc_cancels_new_item_entry_and_stays_in_item_view() {
+    let mut app = App::new(rows());
+    key(&mut app, KeyCode::Char('l'));
+    key(&mut app, KeyCode::Char('n'));
+    assert!(app.creating_item);
+    key(&mut app, KeyCode::Char('x')); // a stray keystroke edits the buffer
+    assert_eq!(key(&mut app, KeyCode::Esc), UiAction::None);
+    assert!(!app.creating_item, "Esc cancels the new-item entry");
+    assert!(app.viewing_items, "and leaves us in the item view");
+    // an empty title (just Enter) adds nothing
+    key(&mut app, KeyCode::Char('n'));
+    assert_eq!(key(&mut app, KeyCode::Enter), UiAction::None);
+    assert!(!app.creating_item);
+}
+
+#[test]
+fn item_view_hint_advertises_new() {
+    let mut app = App::new(rows());
+    key(&mut app, KeyCode::Char('l'));
+    let screen = draw(&app);
+    assert!(screen.contains("n new"));
+}
+
+#[test]
 fn item_view_shows_only_the_selected_items_log() {
     // each item's log is matched by the `Task<id>` convention; Task1 must not
     // pick up the Task10 entry (whole-token match)

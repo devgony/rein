@@ -268,6 +268,34 @@ pub fn set_checked(body: &str, item_id: &str, checked: bool) -> Result<String> {
     Ok(lines.join("\n") + "\n")
 }
 
+/// Append a new unchecked checklist item to the `## Tasks` section (created at
+/// the end of the document if absent), landing at the bottom of the existing
+/// list. The item carries no id here; the next `ensure_item_ids` heal pass
+/// assigns one, exactly as for an item typed by hand in `$EDITOR`.
+pub fn append_item(body: &str, text: &str) -> Result<String> {
+    let text = text.trim();
+    if text.is_empty() {
+        bail!("item text is empty");
+    }
+    let line = format!("- [ ] {}", text);
+    let Some((_, end)) = section_range(body, "## Tasks") else {
+        // no Tasks section yet: start one at the end of the document
+        let mut out = body.trim_end().to_string();
+        out.push_str(&format!("\n\n## Tasks\n\n{}\n", line));
+        return Ok(out);
+    };
+    // insert after the last non-blank line of the section so the item lands at
+    // the bottom of the list, not past the blank that separates it from the
+    // next `## ` heading.
+    let mut lines: Vec<String> = body.lines().map(|l| l.to_string()).collect();
+    let mut at = end;
+    while at > 0 && lines[at - 1].trim().is_empty() {
+        at -= 1;
+    }
+    lines.insert(at, line);
+    Ok(lines.join("\n") + "\n")
+}
+
 /// Split a failed item's decorations off its text. A failed item carries the
 /// `FAILED_SENTINEL` comment, its text wrapped in `~~strikethrough~~`, and a
 /// trailing `FAIL_MARK`. Returns `(was_failed, clean_text)`; decorations are
@@ -543,6 +571,37 @@ mod tests {
         let body = set_checked(&body, "one", false).unwrap();
         assert!(body.contains("- [ ] <!-- task:one -->"));
         assert!(set_checked(&body, "nope", true).is_err());
+    }
+
+    #[test]
+    fn append_item_adds_to_tasks_section() {
+        let doc = sample(); // two items under ## Tasks, then Validation/Notes/Agent Log
+        let body = append_item(&doc.body, "Third thing").unwrap();
+        let items = scan_items(&body);
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[2].text, "Third thing");
+        assert!(!items[2].checked && !items[2].failed);
+        // it landed inside ## Tasks (its section), not past the section break
+        let sections = item_sections(&body);
+        assert_eq!(sections[2], "Tasks");
+        // empty / whitespace text is rejected
+        assert!(append_item(&body, "   ").is_err());
+        // a following id heal gives the new item a stable integer id
+        let (healed, changed) = ensure_item_ids(&body);
+        assert!(changed);
+        let last = scan_items(&healed).into_iter().last().unwrap();
+        assert!(last.id.is_some());
+        assert_eq!(last.text, "Third thing");
+    }
+
+    #[test]
+    fn append_item_creates_tasks_section_when_missing() {
+        let body = "## Goal\n\nNo tasks heading here\n";
+        let out = append_item(body, "First item").unwrap();
+        assert!(out.contains("## Tasks"));
+        let items = scan_items(&out);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].text, "First item");
     }
 
     #[test]

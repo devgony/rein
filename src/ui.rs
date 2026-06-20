@@ -108,6 +108,7 @@ pub enum UiAction {
     CopyDir(PathBuf),       // copy the task's working directory path to the clipboard
     Run(String),            // launch an agent on the task in the background
     ToggleItem(String, String), // task id + item id: flip its checkbox (reopens a failed item)
+    AddItem(String, String),    // task id + text: append a new checklist item to ## Tasks
 }
 
 /// How `s` claims a task: plain single mode, an isolated worktree, or a
@@ -177,6 +178,9 @@ pub struct App {
     /// Cursor among the focused task's checklist items (only meaningful while
     /// `viewing_items`).
     pub item_sel: usize,
+    /// True while typing a new checklist item in the item view (a sub-mode of
+    /// `viewing_items`); the text accumulates in `input`.
+    pub creating_item: bool,
 }
 
 impl App {
@@ -208,6 +212,7 @@ impl App {
             home_label: None,
             viewing_items: false,
             item_sel: 0,
+            creating_item: false,
         }
     }
 
@@ -306,6 +311,32 @@ impl App {
         // space toggles its checkbox, the preview shows its Agent-Log entries.
         // h/Esc/q step back out to the task list (Ctrl-c still quits).
         if self.viewing_items {
+            // text entry for a new checklist item (a sub-mode of the item view):
+            // Enter adds it, Esc cancels; everything else just edits `input`.
+            if self.creating_item {
+                match key.code {
+                    KeyCode::Esc => {
+                        self.creating_item = false;
+                        self.input.clear();
+                    }
+                    KeyCode::Enter => {
+                        self.creating_item = false;
+                        let text = self.input.trim().to_string();
+                        self.input.clear();
+                        if !text.is_empty() {
+                            if let Some(t) = self.selected_task() {
+                                return UiAction::AddItem(t.id.clone(), text);
+                            }
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        self.input.pop();
+                    }
+                    KeyCode::Char(c) => self.input.push(c),
+                    _ => {}
+                }
+                return UiAction::None;
+            }
             if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
                 return UiAction::Quit;
             }
@@ -316,6 +347,8 @@ impl App {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('h') | KeyCode::Char('q') => {
                     self.viewing_items = false;
+                    self.creating_item = false;
+                    self.input.clear();
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
                     if !items.is_empty() {
@@ -331,6 +364,11 @@ impl App {
                             return UiAction::ToggleItem(t.id.clone(), item_id.clone());
                         }
                     }
+                }
+                // add a new checklist item to the task's ## Tasks section
+                KeyCode::Char('n') => {
+                    self.creating_item = true;
+                    self.input.clear();
                 }
                 _ => {}
             }
@@ -911,7 +949,10 @@ impl App {
     }
 
     fn render_statusline(&self, f: &mut Frame, area: Rect) {
-        let text = if self.creating {
+        let text = if self.creating_item {
+            let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
+            format!("new item [{}]: {} · Enter add · Esc cancel", slug, self.input)
+        } else if self.creating {
             let proj = self
                 .selected_task()
                 .map(|t| t.project.clone())
@@ -943,7 +984,7 @@ impl App {
         } else if self.viewing_items {
             let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
             format!(
-                "items {} · j/k move · space toggle check · h/Esc/q back",
+                "items {} · j/k move · space toggle check · n new · h/Esc/q back",
                 slug
             )
         } else if self.issuing {
@@ -1576,6 +1617,25 @@ fn event_loop(
                 }
                 app.tasks = load_all_rows(projects);
             }
+            UiAction::AddItem(id, text) => {
+                let r = match find_task(projects, &id) {
+                    Some((info, task)) => add_item(&info.store, &task, &text),
+                    None => Err(anyhow!("task '{}' vanished", id)),
+                };
+                if let Err(e) = r {
+                    app.popup = Some(format!("{:#}", e));
+                    app.popup_error = true;
+                }
+                app.tasks = load_all_rows(projects);
+                // land the cursor on the freshly added item (now the last one)
+                let n = app
+                    .selected_task()
+                    .map(|t| task_items(&t.body).len())
+                    .unwrap_or(0);
+                if n > 0 {
+                    app.item_sel = n - 1;
+                }
+            }
         }
         // exec verbs print progress to stdout; in raw mode that leaves stray text
         // on the alternate screen, so force a full repaint after each action
@@ -1602,6 +1662,22 @@ fn toggle_item(store: &Store, task: &TaskRef, item_id: &str) -> Result<()> {
     doc.body = new_body;
     doc.touch();
     store.write_doc(&task.path, &doc)
+}
+
+/// Append a new checklist item to a task's `## Tasks` section, then heal item
+/// IDs so the fresh line gets a stable integer id — the same persist-then-heal
+/// path `rein open` follows after an `$EDITOR` edit (and the mirror of
+/// `toggle_item`).
+fn add_item(store: &Store, task: &TaskRef, text: &str) -> Result<()> {
+    let body = crate::task::append_item(&task.doc.body, text)?;
+    let mut doc = task.doc.clone();
+    doc.body = body;
+    doc.touch();
+    store.write_doc(&task.path, &doc)?;
+    if let Some(fresh) = store.find_by_id(&task.id) {
+        crate::commands::assign_ids(store, &fresh)?;
+    }
+    Ok(())
 }
 
 /// Heal item IDs for a doc just edited in $EDITOR (matches `rein open`).
