@@ -1,6 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
+use rein::gitx::Worktree;
 use rein::store::Status;
 use rein::ui::{App, StartMode, TaskRow, UiAction};
 use std::path::PathBuf;
@@ -931,4 +932,166 @@ fn item_view_notes_when_no_log_references_the_item() {
     key(&mut app, KeyCode::Char('l'));
     let screen = draw(&app);
     assert!(screen.contains("no Agent Log entries reference Task1"));
+}
+
+// ---------------------------------------------------------------------------
+// worktree view (`w`)
+// ---------------------------------------------------------------------------
+
+fn wt(path: &str, branch: Option<&str>, is_main: bool, locked: bool) -> Worktree {
+    Worktree {
+        path: PathBuf::from(path),
+        head: Some("abc1234567".into()),
+        branch: branch.map(str::to_string),
+        bare: false,
+        detached: branch.is_none(),
+        locked,
+        prunable: false,
+        is_main,
+    }
+}
+
+/// An app already drilled into a project's worktrees (the event loop normally
+/// populates this after `w`): main + an unlocked and a locked linked worktree.
+fn worktree_view() -> App {
+    let mut app = App::new(rows());
+    app.viewing_worktrees = true;
+    app.worktree_anchor = Some("task-20260613-settings-cleanup".into());
+    app.worktree_project = "acme/web".into();
+    app.worktrees = vec![
+        wt("/repo", Some("main"), true, false),
+        wt("/store/worktrees/feat-a", Some("feat-a"), false, false),
+        wt("/store/worktrees/feat-b", Some("feat-b"), false, true),
+    ];
+    app
+}
+
+#[test]
+fn w_opens_the_worktree_view_for_the_selected_tasks_project() {
+    let mut app = App::new(rows());
+    assert_eq!(
+        key(&mut app, KeyCode::Char('w')),
+        UiAction::Worktrees("task-20260613-settings-cleanup".into())
+    );
+    // with no task selected there's no project to anchor on
+    let mut empty = App::new(vec![]);
+    assert_eq!(key(&mut empty, KeyCode::Char('w')), UiAction::None);
+    assert!(empty.message.contains("no task selected"));
+}
+
+#[test]
+fn worktree_view_lists_worktrees_with_flags_and_hint() {
+    let app = worktree_view();
+    let screen = draw(&app);
+    assert!(screen.contains("worktrees · acme/web"));
+    assert!(screen.contains("main"));
+    assert!(screen.contains("feat-a"));
+    assert!(screen.contains("feat-b"));
+    assert!(screen.contains("[main]"));
+    assert!(screen.contains("[locked]"));
+    // the preview details the selected (first/main) worktree
+    assert!(screen.contains("/repo"));
+    // the status line advertises the worktree shortcuts
+    assert!(screen.contains("n new"));
+    assert!(screen.contains("space lock"));
+    assert!(screen.contains("d remove"));
+    assert!(screen.contains("y copy"));
+    assert!(screen.contains("h/Esc/q back"));
+}
+
+#[test]
+fn space_toggles_lock_on_linked_worktrees_only() {
+    let mut app = worktree_view();
+    // on the main worktree, space is refused with a message
+    assert_eq!(key(&mut app, KeyCode::Char(' ')), UiAction::None);
+    assert!(app.message.contains("main worktree can't be locked"));
+    // j → the unlocked linked worktree: space locks it
+    key(&mut app, KeyCode::Char('j'));
+    assert_eq!(
+        key(&mut app, KeyCode::Char(' ')),
+        UiAction::LockWorktree(
+            "task-20260613-settings-cleanup".into(),
+            "/store/worktrees/feat-a".into(),
+            true
+        )
+    );
+    // j → the locked linked worktree: space unlocks it
+    key(&mut app, KeyCode::Char('j'));
+    assert_eq!(
+        key(&mut app, KeyCode::Char(' ')),
+        UiAction::LockWorktree(
+            "task-20260613-settings-cleanup".into(),
+            "/store/worktrees/feat-b".into(),
+            false
+        )
+    );
+}
+
+#[test]
+fn d_confirms_then_removes_a_linked_worktree_but_never_main() {
+    let mut app = worktree_view();
+    // d on the main worktree is refused, no confirmation opens
+    assert_eq!(key(&mut app, KeyCode::Char('d')), UiAction::None);
+    assert!(!app.deleting_worktree);
+    assert!(app.message.contains("can't remove the main worktree"));
+    // move to a linked worktree: d opens a confirm, y removes it
+    key(&mut app, KeyCode::Char('j'));
+    assert_eq!(key(&mut app, KeyCode::Char('d')), UiAction::None);
+    assert!(app.deleting_worktree);
+    let screen = draw(&app);
+    assert!(screen.contains("remove worktree feat-a?"));
+    assert_eq!(
+        key(&mut app, KeyCode::Char('y')),
+        UiAction::DeleteWorktree(
+            "task-20260613-settings-cleanup".into(),
+            "/store/worktrees/feat-a".into()
+        )
+    );
+    assert!(!app.deleting_worktree);
+    // any other key cancels without removing
+    let mut app = worktree_view();
+    key(&mut app, KeyCode::Char('j'));
+    key(&mut app, KeyCode::Char('d'));
+    assert_eq!(key(&mut app, KeyCode::Char('n')), UiAction::None);
+    assert!(!app.deleting_worktree);
+}
+
+#[test]
+fn n_in_worktree_view_creates_a_worktree_from_a_branch_name() {
+    let mut app = worktree_view();
+    assert_eq!(key(&mut app, KeyCode::Char('n')), UiAction::None);
+    assert!(app.creating_worktree);
+    for c in "hotfix".chars() {
+        key(&mut app, KeyCode::Char(c));
+    }
+    let screen = draw(&app);
+    assert!(screen.contains("new worktree branch: hotfix"));
+    assert_eq!(
+        key(&mut app, KeyCode::Enter),
+        UiAction::AddWorktree("task-20260613-settings-cleanup".into(), "hotfix".into())
+    );
+    assert!(!app.creating_worktree);
+    // an empty branch (just Enter) adds nothing
+    key(&mut app, KeyCode::Char('n'));
+    assert_eq!(key(&mut app, KeyCode::Enter), UiAction::None);
+    assert!(!app.creating_worktree);
+}
+
+#[test]
+fn y_copies_the_selected_worktree_path() {
+    let mut app = worktree_view();
+    key(&mut app, KeyCode::Char('j')); // the feat-a linked worktree
+    assert_eq!(
+        key(&mut app, KeyCode::Char('y')),
+        UiAction::CopyDir(PathBuf::from("/store/worktrees/feat-a"))
+    );
+}
+
+#[test]
+fn h_esc_and_q_step_back_out_of_worktree_view() {
+    for back in [KeyCode::Char('h'), KeyCode::Esc, KeyCode::Char('q')] {
+        let mut app = worktree_view();
+        assert_eq!(key(&mut app, back), UiAction::None);
+        assert!(!app.viewing_worktrees, "{:?} should leave the worktree view", back);
+    }
 }

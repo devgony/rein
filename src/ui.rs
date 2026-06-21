@@ -1,4 +1,4 @@
-use crate::gitx::Repo;
+use crate::gitx::{Repo, Worktree};
 use crate::store::{Status, Store, StoreInfo, TaskRef};
 use crate::Ctx;
 use anyhow::{anyhow, Context, Result};
@@ -111,6 +111,10 @@ pub enum UiAction {
     AddItem(String, String),    // task id + text: append a new checklist item to ## Tasks
     EditItem(String, String, String), // task id + item id + new text: reword a checklist item
     DeleteItem(String, String), // task id + item id: remove a checklist item
+    Worktrees(String),          // anchor task id: open the worktree view for its project's repo
+    AddWorktree(String, String), // anchor task id + branch: git worktree add (-b if branch is new)
+    DeleteWorktree(String, String), // anchor task id + worktree path: git worktree remove
+    LockWorktree(String, String, bool), // anchor task id + path + lock(true)/unlock(false)
 }
 
 /// How `s` claims a task: plain single mode, an isolated worktree, or a
@@ -189,6 +193,25 @@ pub struct App {
     /// True while awaiting the item-delete confirmation key (`y` confirms; any
     /// other key cancels) in the item view.
     pub deleting_item: bool,
+    /// True while drilled into the focused project's git worktrees: the left
+    /// pane lists each worktree and the preview shows the selected one's
+    /// details; `n` adds, `space` locks/unlocks, `d` removes, `y` copies its path.
+    pub viewing_worktrees: bool,
+    /// The worktrees of the anchor project's repo (refreshed after each mutation).
+    pub worktrees: Vec<Worktree>,
+    /// Cursor among `worktrees` (only meaningful while `viewing_worktrees`).
+    pub worktree_sel: usize,
+    /// Task id whose project's repo backs the worktree view — the handle the
+    /// event loop resolves to a repo for list/add/remove/lock.
+    pub worktree_anchor: Option<String>,
+    /// Display label (project name) for the worktree view's title and hint.
+    pub worktree_project: String,
+    /// True while typing a branch name for a new worktree (a sub-mode of
+    /// `viewing_worktrees`); the text accumulates in `input`.
+    pub creating_worktree: bool,
+    /// True while awaiting the worktree-remove confirmation key (`y` confirms;
+    /// any other key cancels) in the worktree view.
+    pub deleting_worktree: bool,
 }
 
 impl App {
@@ -223,6 +246,13 @@ impl App {
             creating_item: false,
             editing_item: false,
             deleting_item: false,
+            viewing_worktrees: false,
+            worktrees: Vec::new(),
+            worktree_sel: 0,
+            worktree_anchor: None,
+            worktree_project: String::new(),
+            creating_worktree: false,
+            deleting_worktree: false,
         }
     }
 
@@ -441,6 +471,112 @@ impl App {
                 KeyCode::Char('d') => {
                     if !items.is_empty() {
                         self.deleting_item = true;
+                    }
+                }
+                _ => {}
+            }
+            return UiAction::None;
+        }
+        // drilled into the focused project's git worktrees: j/k pick one, n adds
+        // a worktree, space locks/unlocks it, d removes it, y copies its path;
+        // h/Esc/q step back out to the task list (Ctrl-c still quits).
+        if self.viewing_worktrees {
+            // branch-name entry for a new worktree (a sub-mode): Enter creates it,
+            // Esc cancels; everything else just edits `input`.
+            if self.creating_worktree {
+                match key.code {
+                    KeyCode::Esc => {
+                        self.creating_worktree = false;
+                        self.input.clear();
+                    }
+                    KeyCode::Enter => {
+                        self.creating_worktree = false;
+                        let branch = self.input.trim().to_string();
+                        self.input.clear();
+                        if !branch.is_empty() {
+                            if let Some(anchor) = self.worktree_anchor.clone() {
+                                return UiAction::AddWorktree(anchor, branch);
+                            }
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        self.input.pop();
+                    }
+                    KeyCode::Char(c) => self.input.push(c),
+                    _ => {}
+                }
+                return UiAction::None;
+            }
+            // confirm a worktree remove: only `y` proceeds; else cancel. The main
+            // worktree is never a delete target (guarded when `d` is pressed).
+            if self.deleting_worktree {
+                self.deleting_worktree = false;
+                let target = self
+                    .worktrees
+                    .get(self.worktree_sel)
+                    .filter(|w| !w.is_main)
+                    .map(|w| w.path.clone());
+                if matches!(key.code, KeyCode::Char('y')) {
+                    if let (Some(anchor), Some(path)) = (self.worktree_anchor.clone(), target) {
+                        return UiAction::DeleteWorktree(anchor, path.display().to_string());
+                    }
+                }
+                return UiAction::None;
+            }
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                return UiAction::Quit;
+            }
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('h') | KeyCode::Char('q') => {
+                    self.viewing_worktrees = false;
+                    self.creating_worktree = false;
+                    self.deleting_worktree = false;
+                    self.input.clear();
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if !self.worktrees.is_empty() {
+                        self.worktree_sel = (self.worktree_sel + 1).min(self.worktrees.len() - 1);
+                    }
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.worktree_sel = self.worktree_sel.saturating_sub(1);
+                }
+                // add a worktree (prompts for a branch name)
+                KeyCode::Char('n') => {
+                    self.creating_worktree = true;
+                    self.input.clear();
+                }
+                // remove the selected worktree (confirm with y); never the main one
+                KeyCode::Char('d') => {
+                    match self.worktrees.get(self.worktree_sel).map(|w| w.is_main) {
+                        Some(true) => self.message = "can't remove the main worktree".into(),
+                        Some(false) => self.deleting_worktree = true,
+                        None => {}
+                    }
+                }
+                // toggle the lock state of the selected worktree (not the main one)
+                KeyCode::Char(' ') => {
+                    let wt = self
+                        .worktrees
+                        .get(self.worktree_sel)
+                        .map(|w| (w.is_main, w.path.clone(), w.locked));
+                    if let Some((is_main, path, locked)) = wt {
+                        if is_main {
+                            self.message = "the main worktree can't be locked".into();
+                        } else if let Some(anchor) = self.worktree_anchor.clone() {
+                            return UiAction::LockWorktree(
+                                anchor,
+                                path.display().to_string(),
+                                !locked,
+                            );
+                        }
+                    }
+                }
+                // copy the selected worktree's path to the clipboard
+                KeyCode::Char('y') => {
+                    if let Some(path) = self.worktrees.get(self.worktree_sel).map(|w| w.path.clone())
+                    {
+                        return UiAction::CopyDir(path);
                     }
                 }
                 _ => {}
@@ -728,6 +864,12 @@ impl App {
                 Some(_) => self.message = "only inbox/active tasks can open a PR".into(),
                 None => self.message = "no task selected".into(),
             },
+            KeyCode::Char('w') => match self.selected_task() {
+                // drill into the selected task's project's git worktrees (the
+                // event loop lists them and opens the view)
+                Some(t) => return UiAction::Worktrees(t.id.clone()),
+                None => self.message = "no task selected".into(),
+            },
             _ => {}
         }
         UiAction::None
@@ -788,7 +930,9 @@ impl App {
     }
 
     fn render_list(&self, f: &mut Frame, area: Rect) {
-        if self.viewing_items {
+        if self.viewing_worktrees {
+            self.render_worktree_list(f, area);
+        } else if self.viewing_items {
             self.render_item_list(f, area);
         } else if self.issuing {
             self.render_issue_picker(f, area);
@@ -881,6 +1025,103 @@ impl App {
         let p = Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .block(Block::default().borders(Borders::ALL).title(title));
+        f.render_widget(p, area);
+    }
+
+    /// The focused project's git worktrees: branch (or detached/bare) + the
+    /// directory name, with `main`/`locked` flags. The cursor (j/k) selects one;
+    /// its details fill the preview. Replaces the task list (like the pickers).
+    fn render_worktree_list(&self, f: &mut Frame, area: Rect) {
+        let title = format!(" worktrees · {} ", self.worktree_project);
+        if self.worktrees.is_empty() {
+            let p = Paragraph::new("no worktrees")
+                .block(Block::default().borders(Borders::ALL).title(title));
+            f.render_widget(p, area);
+            return;
+        }
+        let sel = self.worktree_sel.min(self.worktrees.len() - 1);
+        let items: Vec<ListItem> = self
+            .worktrees
+            .iter()
+            .enumerate()
+            .map(|(row, w)| {
+                let cursor = if row == sel { "▶ " } else { "  " };
+                let (label, label_color) = if w.bare {
+                    ("(bare)".to_string(), Color::DarkGray)
+                } else if let Some(b) = &w.branch {
+                    (b.clone(), Color::Cyan)
+                } else {
+                    ("(detached)".to_string(), Color::DarkGray)
+                };
+                let name = w
+                    .path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_else(|| w.path.to_str().unwrap_or("?"));
+                let mut text_style = Style::default();
+                if row == sel {
+                    text_style = text_style.add_modifier(Modifier::BOLD);
+                }
+                let mut spans = vec![
+                    Span::raw(cursor),
+                    Span::styled(format!("{} ", label), Style::default().fg(label_color)),
+                    Span::styled(format!("— {}", name), text_style),
+                ];
+                if w.is_main {
+                    spans.push(Span::styled(" [main]", Style::default().fg(Color::Magenta)));
+                }
+                if w.locked {
+                    spans.push(Span::styled(" [locked]", Style::default().fg(Color::Yellow)));
+                }
+                if w.prunable {
+                    spans.push(Span::styled(" [prunable]", Style::default().fg(Color::Red)));
+                }
+                ListItem::new(Line::from(spans))
+            })
+            .collect();
+        let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
+        f.render_widget(list, area);
+    }
+
+    /// Preview pane while drilled into worktrees: the selected worktree's full
+    /// path, branch/HEAD and flags — the read view of the CRUD.
+    fn render_worktree_detail(&self, f: &mut Frame, area: Rect) {
+        let dim = Style::default().fg(Color::DarkGray);
+        let lines: Vec<Line> = match self.worktrees.get(self.worktree_sel.min(self.worktrees.len().saturating_sub(1))) {
+            Some(w) => {
+                let branch = if w.bare {
+                    "(bare)".to_string()
+                } else {
+                    w.branch.clone().unwrap_or_else(|| "(detached)".to_string())
+                };
+                let head = w
+                    .head
+                    .as_deref()
+                    .map(|h| h[..h.len().min(12)].to_string())
+                    .unwrap_or_else(|| "—".to_string());
+                let mut flags: Vec<&str> = Vec::new();
+                if w.is_main {
+                    flags.push("main");
+                }
+                if w.locked {
+                    flags.push("locked");
+                }
+                if w.prunable {
+                    flags.push("prunable");
+                }
+                let flags = if flags.is_empty() { "—".to_string() } else { flags.join(", ") };
+                vec![
+                    Line::from(vec![Span::styled("path:   ", dim), Span::raw(w.path.display().to_string())]),
+                    Line::from(vec![Span::styled("branch: ", dim), Span::raw(branch)]),
+                    Line::from(vec![Span::styled("HEAD:   ", dim), Span::raw(head)]),
+                    Line::from(vec![Span::styled("flags:  ", dim), Span::raw(flags)]),
+                ]
+            }
+            None => vec![Line::from("no worktrees")],
+        };
+        let p = Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(Block::default().borders(Borders::ALL).title(" worktree "));
         f.render_widget(p, area);
     }
 
@@ -1007,6 +1248,10 @@ impl App {
     }
 
     fn render_preview(&self, f: &mut Frame, area: Rect) {
+        if self.viewing_worktrees {
+            self.render_worktree_detail(f, area);
+            return;
+        }
         if self.viewing_items {
             self.render_item_log(f, area);
             return;
@@ -1066,6 +1311,21 @@ impl App {
                 "items {} · j/k move · space toggle · n new · e edit · d delete · h/Esc/q back",
                 slug
             )
+        } else if self.creating_worktree {
+            format!("new worktree branch: {} · Enter create · Esc cancel", self.input)
+        } else if self.deleting_worktree {
+            let name = self
+                .worktrees
+                .get(self.worktree_sel)
+                .and_then(|w| w.path.file_name())
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            format!("remove worktree {}? [y]es · any other key cancels", name)
+        } else if self.viewing_worktrees {
+            format!(
+                "worktrees {} · j/k move · n new · space lock · d remove · y copy · h/Esc/q back",
+                self.worktree_project
+            )
         } else if self.issuing {
             "j/k pick project · Enter file issue · Esc cancel".to_string()
         } else if self.picking_project {
@@ -1075,7 +1335,7 @@ impl App {
         } else if !self.message.is_empty() {
             self.message.clone()
         } else {
-            "j/k move · Tab status · P project · Enter edit · l items · n new · s start · m move · d done · D delete · x run · i issue · p PR · y copy dir · / filter · q quit"
+            "j/k move · Tab status · P project · Enter edit · l items · n new · s start · m move · d done · D delete · x run · i issue · p PR · y copy dir · w worktrees · / filter · q quit"
                 .to_string()
         };
         // a readable light gray so the hints stand out (the old dark gray was
@@ -1743,6 +2003,76 @@ fn event_loop(
                     .unwrap_or(0);
                 app.item_sel = app.item_sel.min(n.saturating_sub(1));
             }
+            UiAction::Worktrees(id) => {
+                // resolve the task's project repo, list its worktrees, open the view
+                match find_task(projects, &id) {
+                    Some((info, _)) => {
+                        let project = info.project.clone();
+                        match ctx_for(info).and_then(|ctx| ctx.repo.worktree_list()) {
+                            Ok(list) => {
+                                app.worktrees = list;
+                                app.worktree_sel = 0;
+                                app.worktree_anchor = Some(id);
+                                app.worktree_project = project;
+                                app.viewing_worktrees = true;
+                            }
+                            Err(e) => {
+                                app.popup = Some(format!("{:#}", e));
+                                app.popup_error = true;
+                            }
+                        }
+                    }
+                    None => app.message = format!("task '{}' vanished", id),
+                }
+            }
+            UiAction::AddWorktree(anchor, branch) => {
+                // new worktrees live under the store's worktrees/ dir (like task
+                // worktrees), keeping the repo's parent dir clean
+                let r = match find_task(projects, &anchor) {
+                    Some((info, _)) => {
+                        let path = info.store.root.join("worktrees").join(&branch);
+                        ctx_for(info).and_then(|ctx| ctx.repo.worktree_add_branch(&path, &branch))
+                    }
+                    None => Err(anyhow!("task '{}' vanished", anchor)),
+                };
+                if let Err(e) = r {
+                    app.popup = Some(format!("{:#}", e));
+                    app.popup_error = true;
+                }
+                reload_worktrees(app, projects);
+                // land the cursor on the worktree we just added, if it's there
+                if let Some(pos) = app
+                    .worktrees
+                    .iter()
+                    .position(|w| w.branch.as_deref() == Some(branch.as_str()))
+                {
+                    app.worktree_sel = pos;
+                }
+            }
+            UiAction::DeleteWorktree(anchor, path) => {
+                let r = match find_task(projects, &anchor) {
+                    Some((info, _)) => ctx_for(info)
+                        .and_then(|ctx| ctx.repo.worktree_remove(Path::new(&path), false)),
+                    None => Err(anyhow!("task '{}' vanished", anchor)),
+                };
+                if let Err(e) = r {
+                    app.popup = Some(format!("{:#}", e));
+                    app.popup_error = true;
+                }
+                reload_worktrees(app, projects);
+            }
+            UiAction::LockWorktree(anchor, path, lock) => {
+                let r = match find_task(projects, &anchor) {
+                    Some((info, _)) => ctx_for(info)
+                        .and_then(|ctx| ctx.repo.worktree_lock(Path::new(&path), lock)),
+                    None => Err(anyhow!("task '{}' vanished", anchor)),
+                };
+                if let Err(e) = r {
+                    app.popup = Some(format!("{:#}", e));
+                    app.popup_error = true;
+                }
+                reload_worktrees(app, projects);
+            }
         }
         // exec verbs print progress to stdout; in raw mode that leaves stray text
         // on the alternate screen, so force a full repaint after each action
@@ -1814,6 +2144,21 @@ fn delete_item(store: &Store, task: &TaskRef, item_id: &str) -> Result<()> {
 fn heal_ids(projects: &[StoreInfo], path: &Path) {
     if let Some((info, t)) = find_task_by_path(projects, path) {
         let _ = crate::commands::assign_ids(&info.store, &t);
+    }
+}
+
+/// Re-run `git worktree list` for the worktree view's anchor project and
+/// refresh `app.worktrees`, clamping the cursor. Best-effort: a resolve/list
+/// failure leaves the list as-is (the triggering mutation surfaces its own error).
+fn reload_worktrees(app: &mut App, projects: &[StoreInfo]) {
+    let Some(anchor) = app.worktree_anchor.clone() else {
+        return;
+    };
+    if let Some((info, _)) = find_task(projects, &anchor) {
+        if let Ok(list) = ctx_for(info).and_then(|ctx| ctx.repo.worktree_list()) {
+            app.worktrees = list;
+            app.worktree_sel = app.worktree_sel.min(app.worktrees.len().saturating_sub(1));
+        }
     }
 }
 

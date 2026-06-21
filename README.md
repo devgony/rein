@@ -140,12 +140,15 @@ A single dashboard across all your projects. Launched inside a repo, it pre-scop
 | `i`     | create the issue (pick a GitHub Project, or none), or push to an existing one |
 | `p`     | open a draft PR (then `w` worktree / `b` branch), or push to an existing one |
 | `y`     | copy the task's working directory path to the clipboard |
+| `w`     | view & manage the project's git worktrees (list + `n` add / `space` lock / `d` remove / `y` copy path / `h`/`Esc`/`q` back) |
 | `/`     | filter (matches project name too)             |
 | `q`     | quit                                          |
 
 Editing is always delegated to `$EDITOR` — there is no built-in Markdown editor in the TUI.
 
 Press `l` to **drill into a task's checklist items**: the left pane lists each item with its checkbox state (green done, yellow open, red struck-through failed), the preview shows the Agent-Log entries that reference the selected item (matched by the `Task<id>` convention the run skill follows), and `space` checks/unchecks the item under the cursor (a failed item is reopened). Press `n` to **add a new item** — type its text and `Enter` (the item is appended to the task's `## Tasks` section and gets a stable id), or `Esc` to cancel. Press `e` to **edit** the selected item's text (the entry is prefilled; `Enter` saves, `Esc` cancels) or `d` to **delete** it (asks `y` to confirm) — both keep the item's stable id and checkbox state. `h`/`Esc`/`q` steps back to the task list.
+
+Press `w` to **manage the project's git worktrees** (the selected task's project): the left pane lists every worktree of the repo — branch (or `(detached)`/`(bare)`) and directory name, with `[main]`/`[locked]`/`[prunable]` flags — and the preview shows the selected worktree's full path, branch, HEAD and flags. Press `n` to **add** a worktree (type a branch name; an existing branch is checked out, a new one is created with `-b`, placed under the store's `worktrees/` dir), `space` to **lock/unlock** it, `d` to **remove** it (asks `y` to confirm; git refuses a dirty or locked worktree, surfaced as a popup), or `y` to **copy its path** to the clipboard. The main worktree can't be locked or removed. `h`/`Esc`/`q` steps back to the task list.
 
 Failed items (resolved via `rein fail`) render in red and struck through in the preview, distinct from green done and yellow open.
 
