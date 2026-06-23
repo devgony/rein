@@ -488,6 +488,15 @@ pub fn log_section(body: &str) -> Option<String> {
     Some(lines[start + 1..end].join("\n").trim().to_string())
 }
 
+/// The trimmed content of a `## ` section (the lines after its heading, up to the
+/// next `## `). `None` when the heading is absent. Used by `rein summary` to pull
+/// the Goal text out of the document.
+pub fn section_content(body: &str, heading: &str) -> Option<String> {
+    let (start, end) = section_range(body, heading)?;
+    let lines: Vec<&str> = body.lines().collect();
+    Some(lines[start + 1..end].join("\n").trim().to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Managed sections (issue / PR projections)
 // ---------------------------------------------------------------------------

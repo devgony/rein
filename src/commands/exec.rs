@@ -54,11 +54,18 @@ pub fn start(
 
     if worktree {
         setup_worktree(ctx, &task, &branch_name, &mut st)?;
-    } else {
-        if branch.is_some() {
-            setup_branch(ctx, &task, &branch_name, &mut st)?;
-        }
+    } else if branch.is_some() {
+        setup_branch(ctx, &task, &branch_name, &mut st)?;
         // single mode: current pointer
+        ctx.store.write_current(&task.id)?;
+    } else {
+        // single mode claims no new branch — the work happens on whatever branch
+        // is already checked out, so record *that* in the frontmatter (and state)
+        // rather than leaving `branch:` blank. Detached HEAD → nothing to record.
+        if let Some(current) = ctx.repo.current_branch() {
+            st.branch = Some(current.clone());
+            set_branch_frontmatter(ctx, &task, &current)?;
+        }
         ctx.store.write_current(&task.id)?;
     }
 
@@ -205,13 +212,25 @@ fn create_draft_pr(
     // push the branch so `gh pr create --head` can find it on the remote
     ctx.repo.push_branch(branch_name)?;
     let gh = Gh::in_dir(&ctx.repo.workdir);
-    let body = task::pr_projection(&task.doc);
+    // When the task is already linked to an issue, the issue holds the full
+    // managed task description — so the PR body is just `resolves #<n>` (GitHub's
+    // closing keyword auto-closes the issue on merge and cross-links the two),
+    // avoiding a duplicate of the body that already lives on the issue. With no
+    // issue, the PR body carries the full projection and seeds the sync baseline.
+    let (body, pr_synced) = match task.doc.front.github_issue {
+        Some(issue) => (format!("resolves #{}", issue), None),
+        None => {
+            let projection = task::pr_projection(&task.doc);
+            let hash = crate::sync::hash_block(&projection);
+            (projection, Some(hash))
+        }
+    };
     let number = gh.pr_create_draft(&task.doc.front.title, &body, branch_name)?;
     let mut doc = task.doc.clone();
     doc.front.github_pr = Some(number);
     doc.touch();
     ctx.store.write_doc(&task.path, &doc)?;
-    st.pr_synced_hash = Some(crate::sync::hash_block(&body));
+    st.pr_synced_hash = pr_synced;
     if let Some(issue) = doc.front.github_issue {
         let _ = gh.issue_comment(issue, &format!("Started in PR #{}", number));
     }
@@ -396,13 +415,49 @@ pub fn check(ctx: &Ctx, item_id: &str, flag: Option<&str>, checked: bool) -> Res
     Ok(())
 }
 
-pub fn log(ctx: &Ctx, text: &str, flag: Option<&str>) -> Result<()> {
+/// `rein log <text> --task <item-id>` — append an Agent-Log entry tied to a
+/// checklist item. The item id is mandatory (so a long task list never loses the
+/// association the way a hand-written `Task<id>:` prefix does) and the entry is
+/// written as `Task<id>: <text>`, the convention `rein ui`'s per-item log filter
+/// matches. The document is resolved implicitly (worktree / REIN_TASK / current);
+/// use `rein note` for an entry not about any specific item.
+pub fn log(ctx: &Ctx, text: &str, item_id: &str) -> Result<()> {
+    let task = resolve_for_mutation(ctx, None)?;
+    // validate the item exists before logging, so a typo'd id fails loudly with
+    // the available ids instead of silently tagging a non-existent item
+    if !task::scan_items(&task.doc.body)
+        .iter()
+        .any(|i| i.id.as_deref() == Some(item_id))
+    {
+        return Err(item_error_hint(
+            ctx,
+            &task,
+            item_id,
+            anyhow!("item '{}' not found", item_id),
+        ));
+    }
+    let mut doc = task.doc.clone();
+    doc.body = task::append_log(
+        &doc.body,
+        &format!("{} Task{}: {}", util::now_iso(), item_id, text),
+    );
+    doc.touch();
+    ctx.store.write_doc(&task.path, &doc)?;
+    println!("logged Task{} in {}", item_id, task.slug);
+    Ok(())
+}
+
+/// `rein note <text> [--task <doc>]` — append a general Agent-Log entry not tied
+/// to any checklist item (a cross-cutting observation, a decision, a heads-up).
+/// `--task` selects the document like the other mutation verbs; without it the
+/// resolved task is used.
+pub fn note(ctx: &Ctx, text: &str, flag: Option<&str>) -> Result<()> {
     let task = resolve_for_mutation(ctx, flag)?;
     let mut doc = task.doc.clone();
     doc.body = task::append_log(&doc.body, &format!("{} {}", util::now_iso(), text));
     doc.touch();
     ctx.store.write_doc(&task.path, &doc)?;
-    println!("logged to {}", task.slug);
+    println!("noted in {}", task.slug);
     Ok(())
 }
 

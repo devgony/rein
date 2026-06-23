@@ -45,6 +45,8 @@ enum Cmd {
         #[arg(long)]
         path: bool,
     },
+    /// Summarize a task: its title (frontmatter) and Goal (## Goal)
+    Summary { task: Option<String> },
     /// Switch the task binding (worktree pointer inside a bound worktree, current file otherwise)
     Use { task: String },
     /// Move a task to any state (plain relocation; no worktree/GitHub effects)
@@ -86,9 +88,19 @@ enum Cmd {
         #[arg(long)]
         task: Option<String>,
     },
-    /// Append a line to the Agent Log
+    /// Append an item-scoped line to the Agent Log (`--task` is the item id, required)
     Log {
         text: String,
+        /// Checklist item id this note is about — the entry is tagged `Task<id>`
+        /// so it shows under that item in `rein ui`. Required (use `rein note`
+        /// for an entry not tied to a specific item).
+        #[arg(long)]
+        task: String,
+    },
+    /// Append a general line to the Agent Log, not tied to any checklist item
+    Note {
+        text: String,
+        /// Target a specific task document (slug/id); defaults to the resolved task
         #[arg(long)]
         task: Option<String>,
     },
@@ -182,6 +194,7 @@ fn run() -> Result<()> {
         Cmd::Todo { all, task } => local::todo(&ctx, task.as_deref(), all),
         Cmd::Open { task } => local::open(&ctx, task.as_deref()),
         Cmd::Current { path } => local::current(&ctx, path),
+        Cmd::Summary { task } => local::summary(&ctx, task.as_deref()),
         Cmd::Use { task } => local::use_task(&ctx, &task),
         Cmd::Move { task, status } => exec::move_to(&ctx, &task, &status),
         Cmd::Start {
@@ -195,7 +208,8 @@ fn run() -> Result<()> {
         Cmd::Logs { task } => exec::logs(&ctx, task.as_deref()),
         Cmd::Check { item_id, task } => exec::check(&ctx, &item_id, task.as_deref(), true),
         Cmd::Uncheck { item_id, task } => exec::check(&ctx, &item_id, task.as_deref(), false),
-        Cmd::Log { text, task } => exec::log(&ctx, &text, task.as_deref()),
+        Cmd::Log { text, task } => exec::log(&ctx, &text, &task),
+        Cmd::Note { text, task } => exec::note(&ctx, &text, task.as_deref()),
         Cmd::Fail {
             item_id,
             reason,

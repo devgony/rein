@@ -76,7 +76,8 @@ Then hand it to Claude Code; following the skill rules, the LLM proceeds:
 ```sh
 rein todo                     # list remaining unchecked items (skill entry point)
 rein check <item-id>          # check off a completed item
-rein log "implementation note"
+rein log "implementation note" --task <item-id>   # item-scoped Agent Log entry (tagged Task<id>)
+rein note "general observation"                   # Agent Log entry not tied to an item
 rein fail <item-id> --reason "…"   # resolve an item as failed (drops out of todo)
 rein retry <item-id>               # reopen a failed item
 ```
@@ -211,6 +212,7 @@ rein list [--status <s>]             list tasks
 rein todo [--all] [--task <id>]      resolved task's unchecked items (--all: all items + state)
 rein open [task]                     open in $EDITOR (fuzzy picker with no argument)
 rein current [--path]                print the resolved task (read-only)
+rein summary [task]                  print the task's title (frontmatter) + Goal (## Goal)
 rein use <task>                      switch the task binding (worktree pointer / current file)
 rein move <task> <status>            move to any state (plain relocation, no side effects)
 rein start <task> [--worktree] [--branch <b>] [--draft-pr]
@@ -218,7 +220,8 @@ rein pr [task] [--worktree]           open a draft PR (worktree under the store,
 rein run [task]                       launch an agent on the task in the background (in its worktree)
 rein logs [task]                      show the background session id of the last run (+ claude attach/logs)
 rein check / uncheck <item-id> [--task <id>]
-rein log <text> [--task <id>]
+rein log <text> --task <item-id>     item-scoped Agent Log entry (tagged Task<id>; --task required)
+rein note <text> [--task <id>]       Agent Log entry not tied to a checklist item
 rein fail <item-id> --reason <text> [--task <id>]   resolve as failed (checked + struck through, drops from todo)
 rein retry <item-id> [--task <id>]   reopen a failed item
 rein issue <task> | pull-inbox | pull | push [--resolved]
@@ -236,7 +239,7 @@ rein status | root | ui
 rein init --skill   # scaffold .claude/skills/run-rein-task/SKILL.md
 ```
 
-The skill gets remaining items via `rein todo` and changes state only through `rein check`/`log`/`fail` (never editing the Markdown directly). The full rules live in the scaffolded SKILL.md.
+The skill gets remaining items via `rein todo` and changes state only through `rein check`/`log`/`note`/`fail` (never editing the Markdown directly). `rein log` is item-scoped (`--task <item-id>` is required, and the entry is tagged `Task<id>` so it shows under that item in the TUI's per-item log); `rein note` records an entry not tied to any item. The full rules live in the scaffolded SKILL.md.
 
 ### Launching the agent (`rein run`)
 

@@ -22,7 +22,8 @@ Rules:
 1. Execute only the unchecked items `rein todo` prints.
 2. Never edit checkboxes or Agent Log in the Markdown directly. Use:
    - `rein check <item-id>` after a task is implemented and verified
-   - `rein log "<text>"` to append a concise entry after each completed task
+   - `rein log "<text>" --task <item-id>` to record progress on a specific item — `--task` is required and the entry is tagged so it shows under that item in `rein ui`
+   - `rein note "<text>"` to append an Agent Log entry not tied to any specific item
    - `rein fail <item-id> --reason "<text>"` when blocked — resolves the item (it drops out of `rein todo`, so a re-run won't re-attempt it); `rein retry <item-id>` reopens it
 3. Preserve `<!-- task:... -->` ID comments when editing other sections.
 4. Run relevant tests before checking validation items.
@@ -178,6 +179,26 @@ pub fn current(ctx: &Ctx, path: bool) -> Result<()> {
         println!("{}", task.path.display());
     } else {
         println!("{}", task.id);
+    }
+    Ok(())
+}
+
+/// `rein summary [task]` — print a task's title (frontmatter) and its Goal
+/// (## Goal). With no argument it summarizes the resolved task (worktree /
+/// REIN_TASK / current), like `rein current`; a query picks any task by
+/// slug/id/prefix. A one-glance "what is this task" without opening the doc.
+pub fn summary(ctx: &Ctx, query: Option<&str>) -> Result<()> {
+    let task = match query {
+        Some(q) => ctx.store.find(q)?,
+        None => resolve::resolve_task(ctx, None)?.0,
+    };
+    println!("{}", task.doc.front.title);
+    match crate::task::section_content(&task.doc.body, "## Goal") {
+        Some(goal) if !goal.is_empty() => {
+            println!();
+            println!("{}", goal);
+        }
+        _ => {}
     }
     Ok(())
 }
