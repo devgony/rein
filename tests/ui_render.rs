@@ -926,6 +926,22 @@ fn item_view_shows_only_the_selected_items_log() {
 }
 
 #[test]
+fn item_view_shows_a_failed_items_blocker_log() {
+    // a resolved-failed item still has a Task<id>-tagged blocker entry, so the
+    // reason shows under the item in the drill-in view (regression: `rein fail`
+    // used to write `FAIL <id>:` which the per-item filter never matched)
+    let body = "## Tasks\n\n- [x] <!-- task:1 --> <!-- failed --> ~~Do the thing~~ \u{274c}\n\n## Agent Log\n\n<!-- append-only -->\n- 2026-06-23 Task1: FAIL blocked by upstream";
+    let mut app = one_row(body);
+    key(&mut app, KeyCode::Char('l'));
+    let screen = draw(&app);
+    assert!(screen.contains("log · item 1"));
+    assert!(
+        screen.contains("blocked by upstream"),
+        "a failed item's blocker entry must show in the item log"
+    );
+}
+
+#[test]
 fn item_view_notes_when_no_log_references_the_item() {
     let body = "## Tasks\n\n- [ ] <!-- task:1 --> Lonely\n\n## Agent Log\n\n<!-- append-only -->";
     let mut app = one_row(body);

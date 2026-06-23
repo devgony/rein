@@ -470,10 +470,12 @@ pub fn fail(ctx: &Ctx, item_id: &str, reason: &str, flag: Option<&str>) -> Resul
         Ok(body) => body,
         Err(e) => return Err(item_error_hint(ctx, &task, item_id, e)),
     };
-    // the blocker reason still lands in the (local, non-projected) Agent Log
+    // the blocker reason still lands in the (local, non-projected) Agent Log,
+    // tagged `Task<id>` so it shows under the item in the TUI's per-item log
+    // (the same convention `rein log` uses) rather than being orphaned
     doc.body = task::append_log(
         &doc.body,
-        &format!("{} FAIL {}: {}", util::now_iso(), item_id, reason),
+        &format!("{} Task{}: FAIL {}", util::now_iso(), item_id, reason),
     );
     doc.touch();
     ctx.store.write_doc(&task.path, &doc)?;
@@ -492,7 +494,7 @@ pub fn retry(ctx: &Ctx, item_id: &str, flag: Option<&str>) -> Result<()> {
         Ok(body) => body,
         Err(e) => return Err(item_error_hint(ctx, &task, item_id, e)),
     };
-    doc.body = task::append_log(&doc.body, &format!("{} RETRY {}", util::now_iso(), item_id));
+    doc.body = task::append_log(&doc.body, &format!("{} Task{}: RETRY", util::now_iso(), item_id));
     doc.touch();
     ctx.store.write_doc(&task.path, &doc)?;
     println!("reopened {} in {}", item_id, task.slug);

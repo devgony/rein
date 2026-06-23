@@ -446,7 +446,8 @@ fn mutations_check_uncheck_log_fail() {
         .assert()
         .success();
     let doc = read(&path);
-    assert!(doc.contains("FAIL 1: blocked by upstream"));
+    // the blocker entry is tagged Task<id> so it shows under the item in the UI
+    assert!(doc.contains("Task1: FAIL blocked by upstream"));
     // fail resolves the item: checked box + failed sentinel + ~~strike~~ ❌
     assert!(doc.contains("- [x] <!-- task:1 --> <!-- failed --> ~~Do thing one~~ ❌"));
 
@@ -454,7 +455,7 @@ fn mutations_check_uncheck_log_fail() {
     rein(&env, &env.repo).args(["retry", "1"]).assert().success();
     let doc = read(&path);
     assert!(doc.contains("- [ ] <!-- task:1 --> Do thing one"));
-    assert!(doc.contains("RETRY 1"));
+    assert!(doc.contains("Task1: RETRY"));
 
     // unknown item errors and lists what's available
     rein(&env, &env.repo)
