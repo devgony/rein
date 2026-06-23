@@ -187,8 +187,10 @@ pub fn push_task(ctx: &Ctx, task: &TaskRef, resolved: bool) -> Result<()> {
 
 /// Push the managed section to the task's issue only (TUI `i` on a task that
 /// already has an issue). Mirrors `push_task` but targets a single surface so
-/// `i` and `r` publish to their own surfaces independently.
-pub fn push_issue(ctx: &Ctx, task: &TaskRef) -> Result<()> {
+/// `i` and `r` publish to their own surfaces independently. `force` overwrites
+/// the remote even on a conflict (the single-surface equivalent of
+/// `rein push --resolved`), for the TUI's force-push offer.
+pub fn push_issue(ctx: &Ctx, task: &TaskRef, force: bool) -> Result<()> {
     let _lock = SyncLock::acquire(&ctx.store)?;
     let task = ensure_ids_saved(ctx, task)?;
     let number = task
@@ -197,12 +199,12 @@ pub fn push_issue(ctx: &Ctx, task: &TaskRef) -> Result<()> {
         .github_issue
         .with_context(|| format!("'{}' has no attached issue", task.slug))?;
     let gh = Gh::in_dir(&ctx.repo.workdir);
-    push_surface(ctx, &task, &gh, Surface::Issue(number), false)
+    push_surface(ctx, &task, &gh, Surface::Issue(number), force)
 }
 
 /// Push the managed section to the task's PR only (TUI `r` on a task that
-/// already has a PR).
-pub fn push_pr(ctx: &Ctx, task: &TaskRef) -> Result<()> {
+/// already has a PR). `force` overwrites the remote even on a conflict.
+pub fn push_pr(ctx: &Ctx, task: &TaskRef, force: bool) -> Result<()> {
     let _lock = SyncLock::acquire(&ctx.store)?;
     let task = ensure_ids_saved(ctx, task)?;
     let number = task
@@ -211,7 +213,7 @@ pub fn push_pr(ctx: &Ctx, task: &TaskRef) -> Result<()> {
         .github_pr
         .with_context(|| format!("'{}' has no attached PR", task.slug))?;
     let gh = Gh::in_dir(&ctx.repo.workdir);
-    push_surface(ctx, &task, &gh, Surface::Pr(number), false)
+    push_surface(ctx, &task, &gh, Surface::Pr(number), force)
 }
 
 enum Surface {

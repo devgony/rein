@@ -119,7 +119,7 @@ rein pull                     # apply remote issue-body changes
 rein push                     # push local changes into the issue/PR managed section
 ```
 
-Only the managed section between the `rein:begin`/`rein:end` markers is updated on the remote body; human text outside the markers is preserved. Conflicts are detected by a 3-way hash, backed up under `conflicts/`, and force-pushed with `rein push --resolved` after you resolve them.
+Only the managed section between the `rein:begin`/`rein:end` markers is updated on the remote body; human text outside the markers is preserved. Conflicts are detected by a 3-way hash, backed up under `conflicts/`, and force-pushed with `rein push --resolved` after you resolve them (in the TUI a conflict on `i`/`p` shows a prompt — press `f` to force-push the same way).
 
 Open a draft PR with `rein pr [task] [--worktree]` (worktree-backed, else a main-repo branch), or attach an existing one with `rein attach-pr <n>`; then update it with `rein push` (the Agent Log folds into a `<details>`). In the TUI, `p` opens the same PR flow (pick `w` worktree / `b` branch). `rein pr` pushes the branch to `origin` for you; if the branch has no commits yet it just warns (GitHub rejects an empty PR) — commit your work first, then run `rein pr` again. (`rein start … --draft-pr` folds PR creation into the claim, but since a freshly claimed branch has no commits it will warn — the usual flow is start → work → `rein pr`.)
 
@@ -140,8 +140,9 @@ A single dashboard across all your projects. Launched inside a repo, it pre-scop
 | `d`     | done                                          |
 | `D`     | delete permanently (asks `y` to confirm; removes files + worktree) |
 | `x`     | run an agent on the task in the background (`REIN_RUN_CMD`) |
-| `i`     | create the issue (pick a GitHub Project, or none), or push to an existing one |
-| `p`     | open a draft PR (then `w` worktree / `b` branch), or push to an existing one |
+| `S`     | summarize the task's checklist items into title + Goal via the configured LLM (`rein summary`); runs on a worker thread with a spinner overlay so the slow LLM call doesn't freeze the dashboard (`Ctrl-c` still quits) |
+| `i`     | create the issue (pick a GitHub Project, or none), or push to an existing one (on a sync conflict, press `f` to force-push) |
+| `p`     | open a draft PR (then `w` worktree / `b` branch), or push to an existing one (on a sync conflict, press `f` to force-push) |
 | `y`     | copy the task's working directory path to the clipboard |
 | `w`     | view & manage the project's git worktrees (list + `n` add / `space` lock / `d` remove / `y` copy path / `h`/`Esc`/`q` back) |
 | `/`     | filter (matches project name too)             |
@@ -247,21 +248,21 @@ The skill gets remaining items via `rein todo` and changes state only through `r
 
 ### Launching the agent (`rein run`)
 
-You don't have to `cd` into a worktree to work a task — rein already knows where each task lives. `rein run [task]` (TUI: `x`) launches an agent **in the background**, with its cwd set to the task's worktree (or the main repo if the task only has a branch) and `REIN_TASK`/`REIN_SLUG`/`REIN_BRANCH`/`REIN_DIR` exported, so the agent resolves the task no matter where it was invoked. `rein run` waits for the command and surfaces its output, so the command must self-background and return promptly (the default `claude --bg` does — see below); the agent writes its own transcript to its standard location (Claude Code: `~/.claude/projects/…`, visible in its background-agents view).
+You don't have to `cd` into a worktree to work a task — rein already knows where each task lives. `rein run [task]` (TUI: `x`) launches an agent **in the background**, with its cwd set to the task's worktree (or the main repo if the task only has a branch) and `REIN_TASK`/`REIN_SLUG`/`REIN_BRANCH`/`REIN_DIR`/`REIN_TITLE` exported, so the agent resolves the task no matter where it was invoked. `rein run` waits for the command and surfaces its output, so the command must self-background and return promptly (the default `claude --bg` does — see below); the agent writes its own transcript to its standard location (Claude Code: `~/.claude/projects/…`, visible in its background-agents view).
 
 The command is a template, resolved in order: `REIN_RUN_CMD` env → git config `rein.run` → the built-in default:
 
 ```sh
-claude --bg --dangerously-skip-permissions /run-rein-task
+claude --bg --dangerously-skip-permissions --name "$REIN_TITLE" /run-rein-task
 ```
 
 `claude --bg` dispatches a **tracked background session** (it runs under Claude Code's daemon, not a detached `-p` process) and returns immediately. A custom `REIN_RUN_CMD` should likewise return promptly (self-background) — `rein run` waits for the command and surfaces its output.
 
-No `--name` is passed, so Claude Code auto-names the session from the prompt — easier to read in `claude agents` than a forced `rein:<slug>` label, and rein tracks the session by its **id** regardless. Add `--name` in a custom command if you want to pin your own label.
+`--name "$REIN_TITLE"` pins the session's display name (shown in `claude agents`, the picker, and the terminal title) to `rein:<branch>:<open task numbers>` — the open (unchecked, unfailed) checklist item numbers, with consecutive runs of three or more folded into a range, e.g. `rein:feat-v3:1~12,14,16`. rein exports the computed name as `REIN_TITLE`; a custom command can reference `$REIN_TITLE` (or set its own `--name`). rein still tracks the session by its **id** regardless of the name.
 
 **Watching it.** `claude --bg` prints a session id, which `rein run` echoes and records. The TUI shows the session's live state in the `run:` line of the meta pane (and a green `●` in the list while it's running), refreshed automatically every few seconds. For the full conversation use Claude Code's own tools: `claude agents` (list all sessions), `claude attach <id>` (watch live / resume), `claude logs <id>` (recent output); `rein logs [task]` reprints the recorded id with those commands. Task progress also shows as the checklist and Agent Log fill in (the agent reports through `rein check`/`rein log`).
 
-Override it for a different agent or flags, e.g. `git config rein.run 'claude --name rein:$REIN_SLUG -p /run-rein-task'` (this example pins a `rein:<slug>` name back). Notes:
+Override it for a different agent or flags, e.g. `git config rein.run 'claude --name rein:$REIN_SLUG -p /run-rein-task'` (this example names the session after the slug instead of the default branch + task numbers). Notes:
 
 - The default runs fully autonomously (`--dangerously-skip-permissions`). Claude Code may show a one-time prompt to accept bypass mode, which a detached run can't answer — set `"skipDangerousModePermissionPrompt": true` in `~/.claude/settings.json` to suppress it (if you already use skip-permissions normally, this is likely already set).
 - Prefer a worktree (`rein start … --worktree`) so the autonomous run is isolated; running a branch-only task happens in the main repo and is **not** isolated (rein warns).

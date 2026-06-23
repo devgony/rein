@@ -209,7 +209,7 @@ fn run() -> Result<()> {
         Cmd::Current { path } => local::current(&ctx, path),
         Cmd::Title { text, task } => exec::set_title(&ctx, &text, task.as_deref()),
         Cmd::Goal { text, task } => exec::set_goal(&ctx, &text, task.as_deref()),
-        Cmd::Summary { task } => exec::summary(&ctx, task.as_deref()),
+        Cmd::Summary { task } => exec::summary(&ctx, task.as_deref()).map(|m| println!("{}", m)),
         Cmd::Use { task } => local::use_task(&ctx, &task),
         Cmd::Move { task, status } => exec::move_to(&ctx, &task, &status),
         Cmd::Start {

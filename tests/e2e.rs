@@ -1527,6 +1527,34 @@ fn run_captures_bg_session_id_for_logs() {
 }
 
 #[test]
+fn run_sets_session_title_with_branch_and_open_task_numbers() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "job"]).assert().success();
+    seed_items(&env, "job"); // Tasks: 1,2 · Validation: 3 — all open
+    rein(&env, &env.repo).args(["start", "job", "--worktree"]).assert().success();
+    let marker = env.bin_dir.join("title_marker.txt");
+    // the run command sees REIN_TITLE = rein:<branch>:<open numbers>, range-folded
+    rein(&env, &env.repo)
+        .env("REIN_RUN_CMD", format!("printf '%s' \"$REIN_TITLE\" > {}", marker.display()))
+        .args(["run", "job"])
+        .assert()
+        .success();
+    assert_eq!(wait_for(&marker), "rein:job:1~3");
+
+    // checking an item drops it from the title — only open items count, and a
+    // run of two no longer folds into a range
+    rein(&env, &env.repo).args(["check", "1", "--task", "job"]).assert().success();
+    fs::remove_file(&marker).ok();
+    rein(&env, &env.repo)
+        .env("REIN_RUN_CMD", format!("printf '%s' \"$REIN_TITLE\" > {}", marker.display()))
+        .args(["run", "job"])
+        .assert()
+        .success();
+    assert_eq!(wait_for(&marker), "rein:job:2,3");
+}
+
+#[test]
 fn logs_without_a_run_errors() {
     let env = setup();
     init(&env);

@@ -16,12 +16,12 @@ use std::process::{Command, Stdio};
 /// <id>`) and returns immediately. Launched via `sh -c`, so it can read the
 /// `REIN_*` env vars rein exports; override with `REIN_RUN_CMD` or git `rein.run`.
 ///
-/// No `--name`: Claude Code auto-names the session from the prompt, which reads
-/// better in `claude agents` than a forced `rein:<slug>` label (and rein tracks
-/// the session by its id, not its name). Add `--name` in a custom command to pin
-/// a label of your own.
+/// `--name "$REIN_TITLE"` pins the session's display name (and terminal title)
+/// to `rein:<branch>:<open task numbers>` (see `run`), so a glance at `claude
+/// agents` says which branch and which open items the session is working. A
+/// custom command can use `$REIN_TITLE` the same way (or set its own `--name`).
 const DEFAULT_RUN_CMD: &str =
-    "claude --bg --dangerously-skip-permissions /run-rein-task";
+    "claude --bg --dangerously-skip-permissions --name \"$REIN_TITLE\" /run-rein-task";
 
 /// Default LLM command for `rein summary`. `claude -p` runs Claude Code in
 /// non-interactive print mode: rein pipes the prompt (the task's items) on stdin
@@ -276,6 +276,25 @@ pub fn run(ctx: &Ctx, query: Option<&str>) -> Result<String> {
         .or_else(|| task.doc.front.branch.clone())
         .unwrap_or_default();
 
+    // session title `rein:<branch>:<open task numbers>` — the open (unchecked,
+    // unfailed) item numbers, range-folded like `1~12,14,16`. IDs are computed
+    // query-only (no write), the same way `rein todo` numbers them, so the title
+    // matches the ids the agent sees. Falls back to the slug when no branch is
+    // recorded, and drops the trailing `:` when there is nothing open.
+    let (assigned, _) = task::ensure_item_ids(&task.doc.body);
+    let open_ids: Vec<String> = task::scan_items(&assigned)
+        .into_iter()
+        .filter(|it| !it.checked && !it.failed)
+        .filter_map(|it| it.id)
+        .collect();
+    let label = if branch.is_empty() { task.slug.clone() } else { branch.clone() };
+    let numbers = task::number_ranges(&open_ids);
+    let title = if numbers.is_empty() {
+        format!("rein:{}", label)
+    } else {
+        format!("rein:{}:{}", label, numbers)
+    };
+
     let cmd = std::env::var("REIN_RUN_CMD")
         .ok()
         .filter(|s| !s.trim().is_empty())
@@ -299,6 +318,7 @@ pub fn run(ctx: &Ctx, query: Option<&str>) -> Result<String> {
         .env("REIN_SLUG", &task.slug)
         .env("REIN_BRANCH", &branch)
         .env("REIN_DIR", &dir)
+        .env("REIN_TITLE", &title)
         .output()
         .context("failed to launch run command")?;
     let reported = strip_ansi(&format!(
@@ -507,7 +527,7 @@ pub fn set_goal(ctx: &Ctx, text: &str, flag: Option<&str>) -> Result<()> {
 /// same logic `rein title`/`rein goal` use) — the LLM only returns text, it never
 /// edits the Markdown. Useful right after `rein new <branch>`, when the title and
 /// Goal are still the branch-name placeholder but the items hold the real plan.
-pub fn summary(ctx: &Ctx, query: Option<&str>) -> Result<()> {
+pub fn summary(ctx: &Ctx, query: Option<&str>) -> Result<String> {
     let task = match query {
         Some(q) => ctx.store.find(q)?,
         None => resolve::resolve_task(ctx, None)?.0,
@@ -530,8 +550,8 @@ pub fn summary(ctx: &Ctx, query: Option<&str>) -> Result<()> {
     doc.body = task::set_section_content(&doc.body, "## Goal", &goal);
     doc.touch();
     ctx.store.write_doc(&task.path, &doc)?;
-    println!("summarized {} → title: {}", task.slug, title);
-    Ok(())
+    // return the result; the caller decides how to show it (CLI stdout or TUI popup)
+    Ok(format!("summarized {} → title: {}", task.slug, title))
 }
 
 /// Build the LLM prompt: the checklist item texts plus a strict output contract.

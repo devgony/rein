@@ -518,6 +518,44 @@ pub fn set_section_content(body: &str, heading: &str, content: &str) -> String {
     }
 }
 
+/// Fold a list of checklist-item ids into a compact title fragment for
+/// `rein run`: integer ids are sorted, de-duplicated, and runs of 3+ consecutive
+/// numbers collapse to `start~end` (omitting the in-between numbers), so
+/// `[1,2,…,12,14,16]` → `1~12,14,16`. A run of two stays `a,b` (nothing to
+/// omit). Any non-integer ids (legacy/hand-authored) are appended verbatim in
+/// first-seen order, after the numeric part. Empty input yields an empty string.
+pub fn number_ranges(ids: &[String]) -> String {
+    let mut nums: Vec<u32> = ids.iter().filter_map(|s| s.parse::<u32>().ok()).collect();
+    nums.sort_unstable();
+    nums.dedup();
+    let mut parts: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < nums.len() {
+        let start = nums[i];
+        let mut end = start;
+        while i + 1 < nums.len() && nums[i + 1] == end + 1 {
+            end = nums[i + 1];
+            i += 1;
+        }
+        if end >= start + 2 {
+            parts.push(format!("{}~{}", start, end));
+        } else if end == start + 1 {
+            parts.push(start.to_string());
+            parts.push(end.to_string());
+        } else {
+            parts.push(start.to_string());
+        }
+        i += 1;
+    }
+    // legacy non-integer ids: can't range-fold, list them as-is after the numbers
+    for s in ids {
+        if !s.is_empty() && s.parse::<u32>().is_err() {
+            parts.push(s.clone());
+        }
+    }
+    parts.join(",")
+}
+
 // ---------------------------------------------------------------------------
 // Managed sections (issue / PR projections)
 // ---------------------------------------------------------------------------
@@ -806,6 +844,27 @@ mod tests {
         let added = set_section_content("## Tasks\n\n- [ ] x\n", "## Goal", "Fresh goal");
         assert!(added.starts_with("## Goal\n\nFresh goal"));
         assert!(added.contains("## Tasks"));
+    }
+
+    #[test]
+    fn number_ranges_folds_consecutive_runs() {
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // the spec example: 1..=12 fold, 14 and 16 stay singletons
+        let mut long: Vec<String> = (1..=12).map(|n| n.to_string()).collect();
+        long.push("14".into());
+        long.push("16".into());
+        assert_eq!(number_ranges(&long), "1~12,14,16");
+        // a run of two has nothing to omit → stays explicit
+        assert_eq!(number_ranges(&ids(&["1", "2"])), "1,2");
+        // a run of three is the smallest that folds
+        assert_eq!(number_ranges(&ids(&["1", "2", "3"])), "1~3");
+        // unsorted + duplicate input is normalized
+        assert_eq!(number_ranges(&ids(&["3", "1", "2", "2"])), "1~3");
+        // a lone number, and the empty case
+        assert_eq!(number_ranges(&ids(&["7"])), "7");
+        assert_eq!(number_ranges(&[]), "");
+        // legacy non-integer ids can't fold — appended after the numeric part
+        assert_eq!(number_ranges(&ids(&["1", "2", "3", "one"])), "1~3,one");
     }
 
     #[test]

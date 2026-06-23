@@ -61,13 +61,35 @@ pub fn remote_block(remote_body: &str) -> Option<String> {
     task::extract_managed(remote_body).map(|(_, block, _)| block)
 }
 
+/// A sync conflict (local and remote both changed since the last sync). A typed
+/// error so callers — notably the TUI — can detect it (`downcast_ref`) and offer
+/// a force-push, rather than string-matching the message. Its `Display` is the
+/// same guidance the CLI has always printed, so behavior is unchanged.
+#[derive(Debug, Clone)]
+pub struct Conflict {
+    pub surface: String,
+    pub slug: String,
+}
+
+impl std::fmt::Display for Conflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "conflict on {} for '{}': local and remote both changed since last sync.\n\
+             Backups written to conflicts/. Resolve the local document, then run \
+             `rein push --resolved` (TUI: press `f` to force-push).",
+            self.surface, self.slug
+        )
+    }
+}
+
+impl std::error::Error for Conflict {}
+
 pub fn conflict_error(task: &TaskRef, surface: &str) -> anyhow::Error {
-    anyhow::anyhow!(
-        "conflict on {} for '{}': local and remote both changed since last sync.\n\
-         Backups written to conflicts/. Resolve the local document, then run `rein push --resolved`.",
-        surface,
-        task.slug
-    )
+    anyhow::Error::new(Conflict {
+        surface: surface.to_string(),
+        slug: task.slug.clone(),
+    })
 }
 
 /// Guard: a managed block in the remote body must belong to this task.
