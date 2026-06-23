@@ -231,9 +231,11 @@ fn set_branch_frontmatter(ctx: &Ctx, task: &TaskRef, branch: &str) -> Result<()>
 /// rein knows where each task lives — it runs the configured command (default:
 /// Claude Code) with cwd set to the task's worktree (or the main repo if it only
 /// has a branch), exporting `REIN_TASK`/`REIN_SLUG`/`REIN_BRANCH`/`REIN_DIR` so
-/// the agent resolves the task regardless of cwd. The command is detached
-/// (`nohup … &`) so it keeps running after rein returns; its transcript lands in
-/// the agent's own standard location (e.g. `~/.claude/projects/…`).
+/// the agent resolves the task regardless of cwd. `rein run` waits for the
+/// command and surfaces its output, so the command must self-background and
+/// return promptly: the default `claude --bg` dispatches a tracked session and
+/// returns at once; a custom `REIN_RUN_CMD` should do the same. The agent's
+/// transcript lands in its own standard location (e.g. `~/.claude/projects/…`).
 pub fn run(ctx: &Ctx, query: Option<&str>) -> Result<String> {
     let task = match query {
         Some(q) => ctx.store.find(q)?,

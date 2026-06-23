@@ -240,7 +240,7 @@ The skill gets remaining items via `rein todo` and changes state only through `r
 
 ### Launching the agent (`rein run`)
 
-You don't have to `cd` into a worktree to work a task — rein already knows where each task lives. `rein run [task]` (TUI: `x`) launches an agent **in the background**, with its cwd set to the task's worktree (or the main repo if the task only has a branch) and `REIN_TASK`/`REIN_SLUG`/`REIN_BRANCH`/`REIN_DIR` exported, so the agent resolves the task no matter where it was invoked. It's detached (`nohup … &`) and keeps running after rein returns; the agent writes its own transcript to its standard location (Claude Code: `~/.claude/projects/…`, visible in its background-agents view).
+You don't have to `cd` into a worktree to work a task — rein already knows where each task lives. `rein run [task]` (TUI: `x`) launches an agent **in the background**, with its cwd set to the task's worktree (or the main repo if the task only has a branch) and `REIN_TASK`/`REIN_SLUG`/`REIN_BRANCH`/`REIN_DIR` exported, so the agent resolves the task no matter where it was invoked. `rein run` waits for the command and surfaces its output, so the command must self-background and return promptly (the default `claude --bg` does — see below); the agent writes its own transcript to its standard location (Claude Code: `~/.claude/projects/…`, visible in its background-agents view).
 
 The command is a template, resolved in order: `REIN_RUN_CMD` env → git config `rein.run` → the built-in default:
 
