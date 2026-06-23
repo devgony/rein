@@ -80,6 +80,21 @@ fn store_root(env: &Env) -> PathBuf {
     env.home.join(".local/share/rein").join(key)
 }
 
+/// Add a bare `origin` remote and push `main`, so PR creation can push branches.
+fn add_origin(env: &Env) {
+    git(&env.home, env._tmp.path(), &["init", "--bare", "origin.git"]);
+    let url = env._tmp.path().join("origin.git");
+    git(&env.home, &env.repo, &["remote", "add", "origin", url.to_str().unwrap()]);
+    git(&env.home, &env.repo, &["push", "origin", "main"]);
+}
+
+/// Write a file and commit it in `dir` (a repo or worktree).
+fn commit_in(env: &Env, dir: &Path, file: &str, msg: &str) {
+    fs::write(dir.join(file), "x").unwrap();
+    git(&env.home, dir, &["add", "."]);
+    git(&env.home, dir, &["commit", "-m", msg]);
+}
+
 fn read(p: &Path) -> String {
     fs::read_to_string(p).unwrap_or_else(|e| panic!("read {}: {}", p.display(), e))
 }
@@ -346,7 +361,7 @@ fn start_worktree_binds_task_by_cwd() {
         .stdout(predicate::str::contains("worktree:"));
 
     let id1 = task_id(&env, "active", "feat-one");
-    let wt = env._tmp.path().join("proj-wt/feat-one");
+    let wt = store_root(&env).join("worktrees/feat-one");
     assert!(wt.is_dir(), "worktree not created");
 
     // pointer file in the worktree's git-dir holds the task id
@@ -378,7 +393,7 @@ fn start_worktree_binds_task_by_cwd() {
 
     // branch recorded in frontmatter
     let doc = read(&store_root(&env).join("active/feat-one.md"));
-    assert!(doc.contains("branch: rein/feat-one"));
+    assert!(doc.contains("branch: feat-one"));
 }
 
 #[test]
@@ -684,7 +699,7 @@ fn use_rebinds_worktree_pointer() {
         .args(["start", "one", "--worktree"])
         .assert()
         .success();
-    let wt = env._tmp.path().join("proj-wt/one");
+    let wt = store_root(&env).join("worktrees/one");
     let id_two = task_id(&env, "inbox", "two");
 
     // inside a bound worktree, `use` rewrites the pointer, not the current file
@@ -705,7 +720,7 @@ fn done_preflight_and_worktree_cleanup() {
         .args(["start", "dirty-job", "--worktree"])
         .assert()
         .success();
-    let wt = env._tmp.path().join("proj-wt/dirty-job");
+    let wt = store_root(&env).join("worktrees/dirty-job");
 
     // dirty worktree → pre-flight refuses, nothing moved
     fs::write(wt.join("junk.txt"), "wip").unwrap();
@@ -748,7 +763,7 @@ fn done_keep_worktree() {
         .args(["start", "keepwt", "--worktree"])
         .assert()
         .success();
-    let wt = env._tmp.path().join("proj-wt/keepwt");
+    let wt = store_root(&env).join("worktrees/keepwt");
     fs::write(wt.join("junk.txt"), "wip").unwrap();
     rein(&env, &env.repo)
         .args(["done", "keepwt", "--keep-worktree"])
@@ -768,7 +783,7 @@ fn cancel_force_discards_dirty_worktree() {
         .args(["start", "byebye", "--worktree"])
         .assert()
         .success();
-    let wt = env._tmp.path().join("proj-wt/byebye");
+    let wt = store_root(&env).join("worktrees/byebye");
     fs::write(wt.join("junk.txt"), "wip").unwrap();
 
     rein(&env, &env.repo)
@@ -783,6 +798,67 @@ fn cancel_force_discards_dirty_worktree() {
         .success();
     assert!(!wt.exists());
     assert!(store_root(&env).join("canceled/byebye.md").exists());
+}
+
+#[test]
+fn delete_removes_inbox_task_files() {
+    let env = setup();
+    init(&env);
+    let root = store_root(&env);
+    rein(&env, &env.repo).args(["new", "scratch"]).assert().success();
+    rein(&env, &env.repo).args(["start", "scratch"]).assert().success(); // single mode → current pointer
+    let id = task_id(&env, "active", "scratch");
+    assert_eq!(read(&root.join("current")).trim(), id);
+
+    // delete a task with no worktree → doc, state, and current pointer all gone
+    rein(&env, &env.repo)
+        .args(["delete", "scratch"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("deleted").and(predicate::str::contains(&id)));
+    assert!(!root.join("active/scratch.md").exists());
+    assert!(!root.join("state").join(format!("{}.json", id)).exists());
+    assert!(!root.join("current").exists(), "current pointer must be cleared");
+
+    // deleting a vanished task errors
+    rein(&env, &env.repo)
+        .args(["delete", "scratch"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no task matches"));
+}
+
+#[test]
+fn delete_refuses_dirty_worktree_unless_forced() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "wt task"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["start", "wt-task", "--worktree"])
+        .assert()
+        .success();
+    let wt = store_root(&env).join("worktrees/wt-task");
+    fs::write(wt.join("junk.txt"), "wip").unwrap();
+
+    // a dirty worktree blocks deletion without --force; nothing is removed
+    rein(&env, &env.repo)
+        .args(["delete", "wt-task"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--force"));
+    assert!(wt.exists(), "worktree must survive a refused delete");
+    assert!(store_root(&env).join("active/wt-task.md").exists());
+
+    // --force discards the worktree and removes every record
+    let id = task_id(&env, "active", "wt-task");
+    rein(&env, &env.repo)
+        .args(["delete", "wt-task", "--force"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removed worktree"));
+    assert!(!wt.exists());
+    assert!(!store_root(&env).join("active/wt-task.md").exists());
+    assert!(!store_root(&env).join("state").join(format!("{}.json", id)).exists());
 }
 
 #[test]
@@ -947,6 +1023,30 @@ fn issue_publishes_projection_and_assigns_ids() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("already issue #41"));
+}
+
+#[test]
+fn issue_with_project_flag_files_onto_board() {
+    let env = setup();
+    init(&env);
+    let gh = fake_gh(&env);
+    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    seed_items(&env, "demo");
+
+    // --project passes the board name through to `gh issue create --project`
+    let mut c = rein(&env, &env.repo);
+    gh.apply(&mut c);
+    c.args(["issue", "demo", "--project", "Roadmap"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("issue #41"));
+
+    assert!(
+        gh.log_text().contains("--project Roadmap"),
+        "gh log: {}",
+        gh.log_text()
+    );
+    assert!(read(&store_root(&env).join("inbox/demo.md")).contains("github_issue: 41"));
 }
 
 #[test]
@@ -1174,19 +1274,221 @@ fn attach_pr_push_renders_managed_section_with_folded_log() {
 }
 
 #[test]
-fn start_draft_pr_records_number() {
+fn start_draft_pr_warns_without_commits() {
     let env = setup();
     init(&env);
     let gh = fake_gh(&env);
     rein(&env, &env.repo).args(["new", "feat"]).assert().success();
+    // a freshly claimed branch has no commits → PR creation warns, none is made
     let mut c = rein(&env, &env.repo);
     gh.apply(&mut c);
     c.args(["start", "feat", "--worktree", "--draft-pr"])
         .assert()
+        .failure()
+        .stderr(predicate::str::contains("no commits on 'feat'"));
+    // the task is still claimed + the worktree set up; only the PR is skipped
+    assert!(store_root(&env).join("worktrees/feat").is_dir());
+    assert!(!read(&store_root(&env).join("active/feat.md")).contains("github_pr: 7"));
+}
+
+#[test]
+fn pr_inbox_worktree_warns_without_commits() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "feat"]).assert().success();
+    // the worktree is created under the store, but with no commits the PR warns
+    rein(&env, &env.repo)
+        .args(["pr", "feat", "--worktree"])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("no commits on 'feat'")
+                .and(predicate::str::contains("rein pr")),
+        );
+    assert!(store_root(&env).join("worktrees/feat").is_dir(), "worktree not under store");
+    assert!(!env._tmp.path().join("proj-wt/feat").exists(), "should not litter parent dir");
+    assert!(!read(&store_root(&env).join("active/feat.md")).contains("github_pr: 7"));
+}
+
+#[test]
+fn pr_branch_mode_creates_branch_but_warns_without_commits() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "alpha"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["pr", "alpha"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no commits on 'alpha'"));
+    // the branch was created + checked out in the main repo even though PR warned
+    assert!(!store_root(&env).join("worktrees/alpha").exists());
+    let branch = git(&env.home, &env.repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    assert_eq!(branch, "alpha");
+}
+
+#[test]
+fn pr_pushes_branch_and_opens_draft_when_commits_exist() {
+    let env = setup();
+    init(&env);
+    add_origin(&env);
+    let gh = fake_gh(&env);
+    rein(&env, &env.repo).args(["new", "beta"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["start", "beta", "--worktree"])
+        .assert()
+        .success();
+    // do work in the worktree so the branch has a commit ahead of main
+    commit_in(&env, &store_root(&env).join("worktrees/beta"), "feature.txt", "work");
+    // active task with commits → push the branch + open the draft PR
+    let mut c = rein(&env, &env.repo);
+    gh.apply(&mut c);
+    c.args(["pr", "beta"])
+        .assert()
         .success()
         .stdout(predicate::str::contains("draft PR: #7"));
-    assert!(read(&store_root(&env).join("active/feat.md")).contains("github_pr: 7"));
+    assert!(read(&store_root(&env).join("active/beta.md")).contains("github_pr: 7"));
     assert!(gh.log_text().contains("pr create --draft"));
+    // the branch was pushed to origin
+    let remotes = git(&env.home, &env.repo, &["branch", "-r"]);
+    assert!(remotes.contains("origin/beta"), "branch not pushed: {}", remotes);
+    // a second PR is refused
+    let mut c2 = rein(&env, &env.repo);
+    gh.apply(&mut c2);
+    c2.args(["pr", "beta"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already has PR #7"));
+}
+
+#[test]
+fn pr_reports_actionable_error_when_branch_exists() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "dup"]).assert().success();
+    // a leftover branch from an earlier run collides with the task slug
+    git(&env.home, &env.repo, &["branch", "dup"]);
+    rein(&env, &env.repo)
+        .args(["pr", "dup", "--worktree"])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("branch 'dup' already exists")
+                .and(predicate::str::contains("git branch -D dup")),
+        );
+}
+
+/// Poll until `path` has non-empty content (the run command is backgrounded, and
+/// a shell `>` redirect creates the file empty before the command writes it).
+fn wait_for(path: &Path) -> String {
+    let mut waited = 0;
+    loop {
+        if let Ok(s) = fs::read_to_string(path) {
+            if !s.is_empty() {
+                return s;
+            }
+        }
+        if waited >= 5000 {
+            return fs::read_to_string(path).unwrap_or_default();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        waited += 50;
+    }
+}
+
+#[test]
+fn run_launches_agent_in_worktree_with_task_env() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "job"]).assert().success();
+    rein(&env, &env.repo).args(["start", "job", "--worktree"]).assert().success();
+    let marker = env.bin_dir.join("run_marker.txt");
+    let mut c = rein(&env, &env.repo);
+    c.env(
+        "REIN_RUN_CMD",
+        format!("printf '%s|%s' \"$REIN_TASK\" \"$REIN_DIR\" > {}", marker.display()),
+    );
+    c.args(["run", "job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("running"));
+    let content = wait_for(&marker);
+    let id = task_id(&env, "active", "job");
+    assert!(content.contains(&id), "REIN_TASK not set: {}", content);
+    assert!(content.contains("worktrees/job"), "REIN_DIR not the worktree: {}", content);
+}
+
+#[test]
+fn run_without_worktree_uses_repo_root_and_warns() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "solo"]).assert().success();
+    rein(&env, &env.repo).args(["start", "solo"]).assert().success(); // single mode, no worktree
+    let marker = env.bin_dir.join("run_marker2.txt");
+    let mut c = rein(&env, &env.repo);
+    c.env("REIN_RUN_CMD", format!("printf '%s' \"$REIN_DIR\" > {}", marker.display()));
+    c.args(["run", "solo"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("edits are not isolated"));
+    let content = wait_for(&marker);
+    assert!(!content.contains("worktrees/"), "should run in the repo root, got: {}", content);
+}
+
+#[test]
+fn run_installs_skill_at_user_level_without_touching_repo() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "job"]).assert().success();
+    rein(&env, &env.repo).args(["start", "job", "--worktree"]).assert().success();
+    let user_skill = env.home.join(".claude/skills/run-rein-task/SKILL.md");
+    let wt_skill = store_root(&env).join("worktrees/job/.claude/skills/run-rein-task/SKILL.md");
+    assert!(!user_skill.exists(), "precondition: no user-level skill yet");
+    rein(&env, &env.repo)
+        .env("REIN_RUN_CMD", "true")
+        .args(["run", "job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("installed run-rein-task skill"));
+    // installed globally for any worktree, but the repo/worktree stays clean
+    assert!(user_skill.exists(), "skill should be installed at the user level");
+    assert!(!wt_skill.exists(), "run must not add skill files to the repo worktree");
+}
+
+#[test]
+fn run_captures_bg_session_id_for_logs() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "job"]).assert().success();
+    rein(&env, &env.repo).args(["start", "job", "--worktree"]).assert().success();
+    // fake agent prints what `claude --bg` prints; rein parses the session id out
+    rein(&env, &env.repo)
+        .env("REIN_RUN_CMD", "printf 'backgrounded abcd1234 rein:job\\n'")
+        .args(["run", "job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("backgrounded").and(predicate::str::contains("abcd1234")));
+    let id = task_id(&env, "active", "job");
+    let state = read(&store_root(&env).join("state").join(format!("{}.json", id)));
+    assert!(state.contains("abcd1234"), "session id not recorded: {}", state);
+    // `rein logs` surfaces the id + Claude Code's own viewers
+    rein(&env, &env.repo)
+        .args(["logs", "job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("claude attach abcd1234"));
+}
+
+#[test]
+fn logs_without_a_run_errors() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "job"]).assert().success();
+    rein(&env, &env.repo).args(["start", "job"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["logs", "job"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no run recorded"));
 }
 
 #[test]
@@ -1260,8 +1562,8 @@ fn parallel_worktrees_full_workflow() {
             .assert()
             .success();
     }
-    let wt_a = env._tmp.path().join("proj-wt/job-a");
-    let wt_b = env._tmp.path().join("proj-wt/job-b");
+    let wt_a = store_root(&env).join("worktrees/job-a");
+    let wt_b = store_root(&env).join("worktrees/job-b");
 
     // each worker mutates "its" task by cwd alone — same item id, no cross-talk
     rein(&env, &wt_a).args(["check", "work"]).assert().success();

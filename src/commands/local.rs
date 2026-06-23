@@ -39,13 +39,55 @@ pub fn init(skill: bool) -> Result<()> {
     }
     println!("store: {}", store.root.display());
     if skill {
-        let skill_path = repo
-            .workdir
-            .join(".claude/skills/run-rein-task/SKILL.md");
-        util::atomic_write(&skill_path, SKILL_MD)?;
+        let skill_path = write_skill(&repo.workdir)?;
         println!("skill: {}", skill_path.display());
     }
     Ok(())
+}
+
+/// Write the bundled `run-rein-task` skill under `base/.claude/skills/`, returning
+/// its path. Used by `init --skill` and `rein run` (to seed the skill in a fresh
+/// worktree). Overwrites — call `ensure_skill` to write only when missing.
+pub(crate) fn write_skill(base: &std::path::Path) -> Result<std::path::PathBuf> {
+    let path = base.join(".claude/skills/run-rein-task/SKILL.md");
+    util::atomic_write(&path, SKILL_MD)?;
+    Ok(path)
+}
+
+/// Claude Code's config dir: `$CLAUDE_CONFIG_DIR` or `~/.claude`. `None` if HOME
+/// is unset and the env isn't given. Skills live under `skills/`, transcripts
+/// under `projects/`.
+pub(crate) fn claude_config_dir() -> Option<std::path::PathBuf> {
+    std::env::var("CLAUDE_CONFIG_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(|h| std::path::PathBuf::from(h).join(".claude"))
+        })
+}
+
+/// Personal (user-level) location of the bundled skill, where Claude Code
+/// discovers it for every project regardless of cwd.
+fn user_skill_path() -> Option<std::path::PathBuf> {
+    Some(claude_config_dir()?.join("skills/run-rein-task/SKILL.md"))
+}
+
+/// Install the bundled skill at the user level if absent, so `rein run` resolves
+/// `/run-rein-task` in any worktree without adding files to the repo. Returns the
+/// path if it wrote one; leaves an existing (possibly customized) skill untouched.
+pub(crate) fn ensure_user_skill() -> Result<Option<std::path::PathBuf>> {
+    let Some(path) = user_skill_path() else {
+        return Ok(None);
+    };
+    if path.exists() {
+        return Ok(None);
+    }
+    util::atomic_write(&path, SKILL_MD)?;
+    Ok(Some(path))
 }
 
 /// Create an inbox task draft in `store`. Returns its id and document path.

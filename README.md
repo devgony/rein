@@ -92,15 +92,16 @@ You don't have to add `<!-- task:... -->` IDs by hand — the tool assigns them 
 ### B. Parallel worktrees (Claude Code multi-agent)
 
 ```sh
-rein start feat-a --worktree  # creates ../proj-wt/feat-a + branch rein/feat-a
+rein start feat-a --worktree  # creates a worktree + branch feat-a (prints its path)
 rein start feat-b --worktree
 ```
 
-Each worktree is bound to its own task, so an agent just runs commands from its own cwd:
+Worktrees live under the store (`<store>/worktrees/<slug>`), not beside the repo, so the project's parent dir stays clean and `done`/`cancel` remove them from a path the engine owns. `start` prints the worktree path (`worktree: …`). Each worktree is bound to its own task, so an agent just runs commands from its own cwd:
 
 ```sh
-cd ../proj-wt/feat-a && rein current   # → feat-a (resolved from cwd)
-cd ../proj-wt/feat-b && rein check x   # → edits only feat-b, no cross-talk
+cd <printed worktree path>   # e.g. ~/.local/share/rein/<key>/worktrees/feat-a
+rein current                 # → feat-a (resolved from cwd)
+rein check x                 # → edits only feat-a, no cross-talk
 ```
 
 Clean up explicitly from the parent session (`rein done feat-a` / `rein cancel feat-b --force`). Running a mutation without a task in the main repo is blocked by a guard when two or more tasks are active — pass `--task` or run it from the right worktree.
@@ -109,16 +110,19 @@ Clean up explicitly from the parent session (`rein done feat-a` / `rein cancel f
 
 ```sh
 rein issue settings-cleanup   # publish a GitHub issue (rein label, marker-wrapped)
+rein issue settings-cleanup --project Roadmap  # …and file it onto a GitHub Project board
 rein pull-inbox               # import rein-labeled issues (idempotent)
 rein pull                     # apply remote issue-body changes
 rein push                     # push local changes into the issue/PR managed section
 ```
 
-Only the managed section between the `rein:begin`/`rein:end` markers is updated on the remote body; human text outside the markers is preserved. Conflicts are detected by a 3-way hash, backed up under `conflicts/`, and force-pushed with `rein push --resolved` after you resolve them. Attach a PR with `rein start … --draft-pr` or `rein attach-pr <n>`, then update it with `rein push` (the Agent Log folds into a `<details>`).
+Only the managed section between the `rein:begin`/`rein:end` markers is updated on the remote body; human text outside the markers is preserved. Conflicts are detected by a 3-way hash, backed up under `conflicts/`, and force-pushed with `rein push --resolved` after you resolve them.
+
+Open a draft PR with `rein pr [task] [--worktree]` (worktree-backed, else a main-repo branch), or attach an existing one with `rein attach-pr <n>`; then update it with `rein push` (the Agent Log folds into a `<details>`). In the TUI, `p` opens the same PR flow (pick `w` worktree / `b` branch). `rein pr` pushes the branch to `origin` for you; if the branch has no commits yet it just warns (GitHub rejects an empty PR) — commit your work first, then run `rein pr` again. (`rein start … --draft-pr` folds PR creation into the claim, but since a freshly claimed branch has no commits it will warn — the usual flow is start → work → `rein pr`.)
 
 ## TUI (`rein ui`)
 
-A single dashboard across all your projects. Launched inside a repo, it pre-scopes to that project; press `P` to pick another.
+A single dashboard across all your projects. Launched inside a repo, it pre-scopes to that project; press `P` to pick another. The right column shows a small **meta** pane — id, branch (tagged `(worktree)` or `(branch)`), the working `dir:`, issue/PR numbers, created/updated dates, tags, and the live `run:` state of the last `rein run` (running/done/failed, polled from `claude agents`) — above the Markdown preview of the selected task. A task with a live run also gets a green `●` in the list.
 
 | key     | action                                        |
 | ------- | --------------------------------------------- |
@@ -126,15 +130,25 @@ A single dashboard across all your projects. Launched inside a repo, it pre-scop
 | `Tab`   | cycle status (all/inbox/active/done/canceled) |
 | `P`     | pick project (project > task hierarchy)       |
 | `Enter` | edit in `$EDITOR`                             |
+| `l`     | drill into the task's checklist items (item list + per-item Agent Log; `space` checks/unchecks, `n` adds, `e` edits, `d` deletes, `h`/`Esc`/`q` back) |
 | `n`     | new task                                      |
-| `s`     | start (inbox → active)                        |
+| `s`     | start (inbox → active) → `s` single / `w` worktree / `b` branch |
 | `m`     | move to any state (i/a/d/c)                   |
 | `d`     | done                                          |
-| `p`     | publish issue or push                         |
+| `D`     | delete permanently (asks `y` to confirm; removes files + worktree) |
+| `x`     | run an agent on the task in the background (`REIN_RUN_CMD`) |
+| `i`     | create the issue (pick a GitHub Project, or none), or push to an existing one |
+| `p`     | open a draft PR (then `w` worktree / `b` branch), or push to an existing one |
+| `y`     | copy the task's working directory path to the clipboard |
+| `w`     | view & manage the project's git worktrees (list + `n` add / `space` lock / `d` remove / `y` copy path / `h`/`Esc`/`q` back) |
 | `/`     | filter (matches project name too)             |
 | `q`     | quit                                          |
 
 Editing is always delegated to `$EDITOR` — there is no built-in Markdown editor in the TUI.
+
+Press `l` to **drill into a task's checklist items**: the left pane lists each item with its checkbox state (green done, yellow open, red struck-through failed), the preview shows the Agent-Log entries that reference the selected item (matched by the `Task<id>` convention the run skill follows), and `space` checks/unchecks the item under the cursor (a failed item is reopened). Press `n` to **add a new item** — type its text and `Enter` (the item is appended to the task's `## Tasks` section and gets a stable id), or `Esc` to cancel. Press `e` to **edit** the selected item's text (the entry is prefilled; `Enter` saves, `Esc` cancels) or `d` to **delete** it (asks `y` to confirm) — both keep the item's stable id and checkbox state. `h`/`Esc`/`q` steps back to the task list.
+
+Press `w` to **manage the project's git worktrees** (the selected task's project): the left pane lists every worktree of the repo — branch (or `(detached)`/`(bare)`) and directory name, with `[main]`/`[locked]`/`[prunable]` flags — and the preview shows the selected worktree's full path, branch, HEAD and flags. Press `n` to **add** a worktree (type a branch name; an existing branch is checked out, a new one is created with `-b`, placed under the store's `worktrees/` dir), `space` to **lock/unlock** it, `d` to **remove** it (asks `y` to confirm; git refuses a dirty or locked worktree, surfaced as a popup), or `y` to **copy its path** to the clipboard. The main worktree can't be locked or removed. `h`/`Esc`/`q` steps back to the task list.
 
 Failed items (resolved via `rein fail`) render in red and struck through in the preview, distinct from green done and yellow open.
 
@@ -176,7 +190,7 @@ Hacking on rein itself? Point at the working tree instead of GitHub, and set `de
 
 `dev = true` auto-detects the repo from the plugin's own location; pass a path (`dev = "/path/to/rein"`) to point elsewhere. `:lua =require("rein").command()` prints exactly what will run.
 
-Usage: `<M-r>` (or `:Rein`) opens the dashboard centered as a 95% × 95% float and **closes it again from inside the TUI** — one key, both ways. You can also quit the TUI with its own `q`. Failed items show in red (struck through). Set `keymap = false` to skip the built-in mapping and wire your own key to `:Rein` (give it `mode = { "n", "t" }` so it toggles out from terminal mode too).
+Usage: `<M-r>` (or `:Rein`) opens the dashboard centered as a 95% × 95% float and **hides it again from inside the TUI** — one key, both ways. Toggling off only hides the float: the `rein ui` session stays alive in the background, so the next `<M-r>` **re-shows the same session** (your selected task, item drill-down, and filters are preserved) instead of launching a fresh one. The session ends only when you quit the TUI with its own `q` — after that, the next toggle starts fresh. Failed items show in red (struck through). Set `keymap = false` to skip the built-in mapping and wire your own key to `:Rein` (give it `mode = { "n", "t" }` so it toggles out from terminal mode too).
 
 Options (`opts = { ... }`, defaults shown):
 
@@ -200,6 +214,9 @@ rein current [--path]                print the resolved task (read-only)
 rein use <task>                      switch the task binding (worktree pointer / current file)
 rein move <task> <status>            move to any state (plain relocation, no side effects)
 rein start <task> [--worktree] [--branch <b>] [--draft-pr]
+rein pr [task] [--worktree]           open a draft PR (worktree under the store, else a main-repo branch)
+rein run [task]                       launch an agent on the task in the background (in its worktree)
+rein logs [task]                      show the background session id of the last run (+ claude attach/logs)
 rein check / uncheck <item-id> [--task <id>]
 rein log <text> [--task <id>]
 rein fail <item-id> --reason <text> [--task <id>]   resolve as failed (checked + struck through, drops from todo)
@@ -208,6 +225,7 @@ rein issue <task> | pull-inbox | pull | push [--resolved]
 rein attach-issue <n> | attach-pr <n>
 rein done [task] [--keep-worktree]
 rein cancel [task] [--keep-worktree] [--force]
+rein delete <task> [--force]         permanently remove a task (files + worktree; no GitHub effects)
 rein doctor                          rebuild state/, fix frontmatter drift
 rein status | root | ui
 ```
@@ -219,3 +237,25 @@ rein init --skill   # scaffold .claude/skills/run-rein-task/SKILL.md
 ```
 
 The skill gets remaining items via `rein todo` and changes state only through `rein check`/`log`/`fail` (never editing the Markdown directly). The full rules live in the scaffolded SKILL.md.
+
+### Launching the agent (`rein run`)
+
+You don't have to `cd` into a worktree to work a task — rein already knows where each task lives. `rein run [task]` (TUI: `x`) launches an agent **in the background**, with its cwd set to the task's worktree (or the main repo if the task only has a branch) and `REIN_TASK`/`REIN_SLUG`/`REIN_BRANCH`/`REIN_DIR` exported, so the agent resolves the task no matter where it was invoked. `rein run` waits for the command and surfaces its output, so the command must self-background and return promptly (the default `claude --bg` does — see below); the agent writes its own transcript to its standard location (Claude Code: `~/.claude/projects/…`, visible in its background-agents view).
+
+The command is a template, resolved in order: `REIN_RUN_CMD` env → git config `rein.run` → the built-in default:
+
+```sh
+claude --bg --dangerously-skip-permissions /run-rein-task
+```
+
+`claude --bg` dispatches a **tracked background session** (it runs under Claude Code's daemon, not a detached `-p` process) and returns immediately. A custom `REIN_RUN_CMD` should likewise return promptly (self-background) — `rein run` waits for the command and surfaces its output.
+
+No `--name` is passed, so Claude Code auto-names the session from the prompt — easier to read in `claude agents` than a forced `rein:<slug>` label, and rein tracks the session by its **id** regardless. Add `--name` in a custom command if you want to pin your own label.
+
+**Watching it.** `claude --bg` prints a session id, which `rein run` echoes and records. The TUI shows the session's live state in the `run:` line of the meta pane (and a green `●` in the list while it's running), refreshed automatically every few seconds. For the full conversation use Claude Code's own tools: `claude agents` (list all sessions), `claude attach <id>` (watch live / resume), `claude logs <id>` (recent output); `rein logs [task]` reprints the recorded id with those commands. Task progress also shows as the checklist and Agent Log fill in (the agent reports through `rein check`/`rein log`).
+
+Override it for a different agent or flags, e.g. `git config rein.run 'claude --name rein:$REIN_SLUG -p /run-rein-task'` (this example pins a `rein:<slug>` name back). Notes:
+
+- The default runs fully autonomously (`--dangerously-skip-permissions`). Claude Code may show a one-time prompt to accept bypass mode, which a detached run can't answer — set `"skipDangerousModePermissionPrompt": true` in `~/.claude/settings.json` to suppress it (if you already use skip-permissions normally, this is likely already set).
+- Prefer a worktree (`rein start … --worktree`) so the autonomous run is isolated; running a branch-only task happens in the main repo and is **not** isolated (rein warns).
+- The default prompt is the `/run-rein-task` skill. A new worktree only has a project-level skill if it was **committed** (worktrees check out committed files only). So `rein run` installs rein's bundled copy at the **user level** (`~/.claude/skills/run-rein-task/`) when it's missing — available in every worktree with **no files added to your repo** and nothing to commit or share. (`rein init --skill` is the separate opt-in if you *do* want a project-level skill to commit and customize; a project skill takes precedence over the user-level one.)

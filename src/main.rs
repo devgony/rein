@@ -63,6 +63,17 @@ enum Cmd {
         #[arg(long = "draft-pr")]
         draft_pr: bool,
     },
+    /// Open a draft PR for a task (worktree under the store, or a main-repo branch)
+    Pr {
+        task: Option<String>,
+        /// Set up an isolated worktree (under the store) instead of a main-repo branch
+        #[arg(long)]
+        worktree: bool,
+    },
+    /// Launch an agent on a task in its worktree, in the background (REIN_RUN_CMD)
+    Run { task: Option<String> },
+    /// Show the transcript path of a task's most recent `rein run`
+    Logs { task: Option<String> },
     /// Check an item (LLM-safe mutation)
     Check {
         item_id: String,
@@ -96,7 +107,12 @@ enum Cmd {
         task: Option<String>,
     },
     /// Publish a task as a GitHub issue (shared inbox)
-    Issue { task: String },
+    Issue {
+        task: String,
+        /// Also file the issue onto a GitHub Project board (title or number)
+        #[arg(long)]
+        project: Option<String>,
+    },
     /// Import/refresh all rein-labeled issues
     PullInbox,
     /// Pull the resolved task's issue
@@ -122,6 +138,13 @@ enum Cmd {
         task: Option<String>,
         #[arg(long = "keep-worktree")]
         keep_worktree: bool,
+        #[arg(long)]
+        force: bool,
+    },
+    /// Permanently delete a task: remove its files + worktree (no GitHub effects)
+    Delete {
+        task: String,
+        /// Discard a dirty worktree instead of refusing
         #[arg(long)]
         force: bool,
     },
@@ -167,6 +190,9 @@ fn run() -> Result<()> {
             branch,
             draft_pr,
         } => exec::start(&ctx, &task, worktree, branch.as_deref(), draft_pr),
+        Cmd::Pr { task, worktree } => exec::create_pr(&ctx, task.as_deref(), worktree),
+        Cmd::Run { task } => exec::run(&ctx, task.as_deref()).map(|m| println!("{}", m)),
+        Cmd::Logs { task } => exec::logs(&ctx, task.as_deref()),
         Cmd::Check { item_id, task } => exec::check(&ctx, &item_id, task.as_deref(), true),
         Cmd::Uncheck { item_id, task } => exec::check(&ctx, &item_id, task.as_deref(), false),
         Cmd::Log { text, task } => exec::log(&ctx, &text, task.as_deref()),
@@ -176,7 +202,7 @@ fn run() -> Result<()> {
             task,
         } => exec::fail(&ctx, &item_id, &reason, task.as_deref()),
         Cmd::Retry { item_id, task } => exec::retry(&ctx, &item_id, task.as_deref()),
-        Cmd::Issue { task } => sync_cmd::issue(&ctx, &task),
+        Cmd::Issue { task, project } => sync_cmd::issue(&ctx, &task, project.as_deref()),
         Cmd::PullInbox => sync_cmd::pull_inbox(&ctx),
         Cmd::Pull => sync_cmd::pull(&ctx),
         Cmd::Push { resolved } => sync_cmd::push(&ctx, resolved),
@@ -191,6 +217,7 @@ fn run() -> Result<()> {
             keep_worktree,
             force,
         } => exec::cancel(&ctx, task.as_deref(), keep_worktree, force),
+        Cmd::Delete { task, force } => exec::delete(&ctx, &task, force),
         Cmd::Doctor => local::doctor(&ctx),
         Cmd::Status => local::status(&ctx),
         Cmd::Root => local::root(&ctx),

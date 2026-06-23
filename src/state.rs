@@ -22,6 +22,9 @@ pub struct TaskState {
     pub issue_synced_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_synced_hash: Option<String>,
+    /// Session id of the most recent `rein run`, used to locate its transcript.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_session: Option<String>,
 }
 
 fn default_version() -> u32 {
