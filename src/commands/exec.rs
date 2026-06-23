@@ -7,8 +7,9 @@ use crate::task;
 use crate::util;
 use crate::Ctx;
 use anyhow::{anyhow, bail, Context, Result};
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// Default agent command for `rein run`. `claude --bg` dispatches a tracked
 /// background session (visible in `claude agents`, attach with `claude attach
@@ -21,6 +22,12 @@ use std::process::Command;
 /// a label of your own.
 const DEFAULT_RUN_CMD: &str =
     "claude --bg --dangerously-skip-permissions /run-rein-task";
+
+/// Default LLM command for `rein summary`. `claude -p` runs Claude Code in
+/// non-interactive print mode: rein pipes the prompt (the task's items) on stdin
+/// and reads the completion from stdout. No tools are needed (pure text), so no
+/// skip-permissions. Override with `REIN_SUMMARY_CMD` or git `rein.summary`.
+const DEFAULT_SUMMARY_CMD: &str = "claude -p";
 
 /// inbox→active claim + optional worktree/branch/draft-PR.
 pub fn start(
@@ -459,6 +466,154 @@ pub fn note(ctx: &Ctx, text: &str, flag: Option<&str>) -> Result<()> {
     ctx.store.write_doc(&task.path, &doc)?;
     println!("noted in {}", task.slug);
     Ok(())
+}
+
+/// `rein title <text> [--task <doc>]` — set the frontmatter title (LLM-safe: rein
+/// owns the write, the caller passes text). Single line — newlines are folded to
+/// spaces so the frontmatter stays valid.
+pub fn set_title(ctx: &Ctx, text: &str, flag: Option<&str>) -> Result<()> {
+    let title = text.trim().replace('\n', " ");
+    if title.is_empty() {
+        bail!("title is empty");
+    }
+    let task = resolve_for_mutation(ctx, flag)?;
+    let mut doc = task.doc.clone();
+    doc.front.title = title;
+    doc.touch();
+    ctx.store.write_doc(&task.path, &doc)?;
+    println!("title set for {}", task.slug);
+    Ok(())
+}
+
+/// `rein goal <text> [--task <doc>]` — set the `## Goal` section (LLM-safe: rein
+/// owns the rewrite). The body is replaced wholesale; the heading and the rest of
+/// the document are preserved.
+pub fn set_goal(ctx: &Ctx, text: &str, flag: Option<&str>) -> Result<()> {
+    let goal = text.trim();
+    if goal.is_empty() {
+        bail!("goal is empty");
+    }
+    let task = resolve_for_mutation(ctx, flag)?;
+    let mut doc = task.doc.clone();
+    doc.body = task::set_section_content(&doc.body, "## Goal", goal);
+    doc.touch();
+    ctx.store.write_doc(&task.path, &doc)?;
+    println!("goal set for {}", task.slug);
+    Ok(())
+}
+
+/// `rein summary [task]` — have an LLM summarize the task's checklist items into a
+/// concise title + Goal, then apply both through rein's own safe-write path (the
+/// same logic `rein title`/`rein goal` use) — the LLM only returns text, it never
+/// edits the Markdown. Useful right after `rein new <branch>`, when the title and
+/// Goal are still the branch-name placeholder but the items hold the real plan.
+pub fn summary(ctx: &Ctx, query: Option<&str>) -> Result<()> {
+    let task = match query {
+        Some(q) => ctx.store.find(q)?,
+        None => resolve::resolve_task(ctx, None)?.0,
+    };
+    let items = task::scan_items(&task.doc.body);
+    if items.is_empty() {
+        bail!(
+            "'{}' has no checklist items to summarize — add some under ## Tasks first",
+            task.slug
+        );
+    }
+    let prompt = summary_prompt(&items);
+    let out = run_summary_llm(ctx, &prompt)?;
+    let (title, goal) = parse_summary(&out)?;
+
+    // apply both in a single write, via the same logic `rein title`/`rein goal`
+    // own — the LLM produced text, rein produces the bytes
+    let mut doc = task.doc.clone();
+    doc.front.title = title.clone();
+    doc.body = task::set_section_content(&doc.body, "## Goal", &goal);
+    doc.touch();
+    ctx.store.write_doc(&task.path, &doc)?;
+    println!("summarized {} → title: {}", task.slug, title);
+    Ok(())
+}
+
+/// Build the LLM prompt: the checklist item texts plus a strict output contract.
+fn summary_prompt(items: &[task::Item]) -> String {
+    let mut p = String::from(
+        "You are summarizing a software task for a task tracker, from its checklist items.\n\
+         Write a concise one-line title naming the overall task, and a 1-3 sentence Goal\n\
+         describing the objective. Respond with EXACTLY these two fields and nothing else:\n\
+         TITLE: <one line>\n\
+         GOAL: <one to three sentences>\n\n\
+         Checklist items:\n",
+    );
+    for it in items {
+        p.push_str("- ");
+        p.push_str(it.text.trim());
+        p.push('\n');
+    }
+    p
+}
+
+/// Run the configured summary command (`REIN_SUMMARY_CMD` → git `rein.summary` →
+/// default `claude -p`), piping `prompt` on stdin and returning its stdout.
+fn run_summary_llm(ctx: &Ctx, prompt: &str) -> Result<String> {
+    let cmd = std::env::var("REIN_SUMMARY_CMD")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| ctx.repo.config_get("rein.summary"))
+        .unwrap_or_else(|| DEFAULT_SUMMARY_CMD.to_string());
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg(&cmd)
+        .current_dir(&ctx.repo.workdir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to launch summary command")?;
+    // best-effort write: a command that doesn't drain stdin would otherwise EPIPE
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(prompt.as_bytes());
+    }
+    let out = child.wait_with_output()?;
+    if !out.status.success() {
+        bail!(
+            "summary command failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Parse the LLM's `TITLE:`/`GOAL:` contract. The title is the first `TITLE:`
+/// line; the goal is everything from `GOAL:` onward (so it may span lines). Both
+/// prefixes are matched case-insensitively and tolerate leading whitespace.
+fn parse_summary(out: &str) -> Result<(String, String)> {
+    let mut title: Option<String> = None;
+    let mut goal_lines: Vec<String> = Vec::new();
+    let mut in_goal = false;
+    for line in out.lines() {
+        let trimmed = line.trim_start();
+        let upper = trimmed.to_uppercase();
+        if title.is_none() && upper.starts_with("TITLE:") {
+            title = Some(trimmed[6..].trim().to_string());
+            in_goal = false;
+        } else if upper.starts_with("GOAL:") {
+            in_goal = true;
+            let rest = trimmed[5..].trim();
+            if !rest.is_empty() {
+                goal_lines.push(rest.to_string());
+            }
+        } else if in_goal {
+            goal_lines.push(line.to_string());
+        }
+    }
+    let title = title
+        .filter(|t| !t.is_empty())
+        .context("summary output had no non-empty TITLE: line")?;
+    let goal = goal_lines.join("\n").trim().to_string();
+    if goal.is_empty() {
+        bail!("summary output had no GOAL: content");
+    }
+    Ok((title, goal))
 }
 
 pub fn fail(ctx: &Ctx, item_id: &str, reason: &str, flag: Option<&str>) -> Result<()> {

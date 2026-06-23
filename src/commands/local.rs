@@ -183,26 +183,6 @@ pub fn current(ctx: &Ctx, path: bool) -> Result<()> {
     Ok(())
 }
 
-/// `rein summary [task]` — print a task's title (frontmatter) and its Goal
-/// (## Goal). With no argument it summarizes the resolved task (worktree /
-/// REIN_TASK / current), like `rein current`; a query picks any task by
-/// slug/id/prefix. A one-glance "what is this task" without opening the doc.
-pub fn summary(ctx: &Ctx, query: Option<&str>) -> Result<()> {
-    let task = match query {
-        Some(q) => ctx.store.find(q)?,
-        None => resolve::resolve_task(ctx, None)?.0,
-    };
-    println!("{}", task.doc.front.title);
-    match crate::task::section_content(&task.doc.body, "## Goal") {
-        Some(goal) if !goal.is_empty() => {
-            println!();
-            println!("{}", goal);
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
 pub fn use_task(ctx: &Ctx, query: &str) -> Result<()> {
     let task = ctx.store.find(query)?;
     // symmetric with resolution: a bound worktree rebinds its pointer,

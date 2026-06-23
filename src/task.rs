@@ -488,13 +488,34 @@ pub fn log_section(body: &str) -> Option<String> {
     Some(lines[start + 1..end].join("\n").trim().to_string())
 }
 
-/// The trimmed content of a `## ` section (the lines after its heading, up to the
-/// next `## `). `None` when the heading is absent. Used by `rein summary` to pull
-/// the Goal text out of the document.
-pub fn section_content(body: &str, heading: &str) -> Option<String> {
-    let (start, end) = section_range(body, heading)?;
+/// Replace the body of a `## ` section (the lines after its heading, up to the
+/// next `## `) with `content`, keeping the heading and everything around it. When
+/// the section is absent it is prepended to the document. rein owns this rewrite
+/// so `rein goal`/`rein summary` set the Goal without the LLM editing Markdown.
+pub fn set_section_content(body: &str, heading: &str, content: &str) -> String {
+    let content = content.trim();
     let lines: Vec<&str> = body.lines().collect();
-    Some(lines[start + 1..end].join("\n").trim().to_string())
+    match section_range(body, heading) {
+        Some((start, end)) => {
+            let mut out: Vec<String> = lines[..=start].iter().map(|s| s.to_string()).collect();
+            out.push(String::new());
+            if !content.is_empty() {
+                out.push(content.to_string());
+                out.push(String::new());
+            }
+            out.extend(lines[end..].iter().map(|s| s.to_string()));
+            out.join("\n").trim_end().to_string() + "\n"
+        }
+        None => {
+            let rest = body.trim_start();
+            let mut out = format!("{}\n\n{}", heading, content);
+            if !rest.is_empty() {
+                out.push_str("\n\n");
+                out.push_str(rest);
+            }
+            out.trim_end().to_string() + "\n"
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -771,6 +792,20 @@ mod tests {
         assert!(updated.contains("human outro"));
         assert!(updated.contains("new content"));
         assert!(!updated.contains("old"));
+    }
+
+    #[test]
+    fn set_section_content_replaces_goal() {
+        let doc = sample(); // "## Goal\n\nDemo\n\n## Tasks\n\n- [ ] ... First thing ..."
+        let body = set_section_content(&doc.body, "## Goal", "A new goal\nspanning two lines");
+        assert!(body.contains("## Goal\n\nA new goal\nspanning two lines\n\n## Tasks"));
+        // the heading is kept and the rest of the doc (items) survives untouched
+        assert!(body.contains("- [ ] <!-- task:one --> First thing"));
+        assert!(body.contains("## Validation"));
+        // an absent section is prepended, keeping the existing body
+        let added = set_section_content("## Tasks\n\n- [ ] x\n", "## Goal", "Fresh goal");
+        assert!(added.starts_with("## Goal\n\nFresh goal"));
+        assert!(added.contains("## Tasks"));
     }
 
     #[test]

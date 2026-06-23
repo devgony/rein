@@ -45,7 +45,20 @@ enum Cmd {
         #[arg(long)]
         path: bool,
     },
-    /// Summarize a task: its title (frontmatter) and Goal (## Goal)
+    /// Set the task's title (frontmatter) — LLM-safe; rein owns the write
+    Title {
+        text: String,
+        #[arg(long)]
+        task: Option<String>,
+    },
+    /// Set the task's Goal (## Goal section) — LLM-safe; rein owns the write
+    Goal {
+        text: String,
+        #[arg(long)]
+        task: Option<String>,
+    },
+    /// Summarize the task's items into a title + Goal via an LLM, applied through
+    /// rein (REIN_SUMMARY_CMD → git rein.summary → default `claude -p`)
     Summary { task: Option<String> },
     /// Switch the task binding (worktree pointer inside a bound worktree, current file otherwise)
     Use { task: String },
@@ -194,7 +207,9 @@ fn run() -> Result<()> {
         Cmd::Todo { all, task } => local::todo(&ctx, task.as_deref(), all),
         Cmd::Open { task } => local::open(&ctx, task.as_deref()),
         Cmd::Current { path } => local::current(&ctx, path),
-        Cmd::Summary { task } => local::summary(&ctx, task.as_deref()),
+        Cmd::Title { text, task } => exec::set_title(&ctx, &text, task.as_deref()),
+        Cmd::Goal { text, task } => exec::set_goal(&ctx, &text, task.as_deref()),
+        Cmd::Summary { task } => exec::summary(&ctx, task.as_deref()),
         Cmd::Use { task } => local::use_task(&ctx, &task),
         Cmd::Move { task, status } => exec::move_to(&ctx, &task, &status),
         Cmd::Start {

@@ -71,6 +71,8 @@ rein open settings-cleanup    # write Goal/Tasks/Validation in $EDITOR
 rein start settings-cleanup   # inbox → active, sets current to this task
 ```
 
+`rein title <text>` / `rein goal <text>` set the frontmatter title and the `## Goal` section through rein (LLM-safe — rein owns the write, no direct Markdown edits). Listed the items but the title/Goal are still a placeholder? `rein summary [task]` has an LLM summarize the items into a concise title + Goal and applies both through that same safe path — the LLM only returns text. The command is configurable (`REIN_SUMMARY_CMD` env → git `rein.summary` → default `claude -p`), the prompt (the item list) is piped on stdin, and the reply must be `TITLE: …` / `GOAL: …`.
+
 Then hand it to Claude Code; following the skill rules, the LLM proceeds:
 
 ```sh
@@ -212,7 +214,9 @@ rein list [--status <s>]             list tasks
 rein todo [--all] [--task <id>]      resolved task's unchecked items (--all: all items + state)
 rein open [task]                     open in $EDITOR (fuzzy picker with no argument)
 rein current [--path]                print the resolved task (read-only)
-rein summary [task]                  print the task's title (frontmatter) + Goal (## Goal)
+rein title <text> [--task <id>]      set the frontmatter title (LLM-safe; rein owns the write)
+rein goal <text> [--task <id>]       set the ## Goal section (LLM-safe; rein owns the write)
+rein summary [task]                  LLM-summarize the items into title + Goal, applied via rein
 rein use <task>                      switch the task binding (worktree pointer / current file)
 rein move <task> <status>            move to any state (plain relocation, no side effects)
 rein start <task> [--worktree] [--branch <b>] [--draft-pr]

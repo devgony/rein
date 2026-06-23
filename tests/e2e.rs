@@ -1678,26 +1678,70 @@ fn note_appends_a_general_untagged_agent_log_entry() {
 }
 
 #[test]
-fn summary_prints_title_and_goal() {
+fn title_and_goal_set_via_cli() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "Settings Cleanup"]).assert().success();
-    // give the doc a Goal distinct from the title so we can tell them apart
-    let path = store_root(&env).join("inbox/settings-cleanup.md");
-    let content = read(&path).replace(
-        "## Goal\n\nSettings Cleanup",
-        "## Goal\n\nTidy the settings screen",
-    );
-    fs::write(&path, content).unwrap();
-
+    rein(&env, &env.repo).args(["new", "feat x"]).assert().success();
+    rein(&env, &env.repo).args(["use", "feat-x"]).assert().success();
+    // title sets the frontmatter; goal replaces the ## Goal section — rein owns
+    // the write (the caller never edits the Markdown)
+    rein(&env, &env.repo).args(["title", "Polish the feature"]).assert().success();
     rein(&env, &env.repo)
-        .args(["summary", "settings-cleanup"])
+        .args(["goal", "Make X usable end to end"])
+        .assert()
+        .success();
+    let doc = read(&store_root(&env).join("inbox/feat-x.md"));
+    assert!(doc.contains("title: Polish the feature"));
+    assert!(doc.contains("## Goal\n\nMake X usable end to end"));
+    // the rest of the scaffolding survives the Goal rewrite
+    assert!(doc.contains("## Tasks"));
+    assert!(doc.contains("## Agent Log"));
+    // empty text is rejected
+    rein(&env, &env.repo)
+        .args(["goal", "   "])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("empty"));
+}
+
+#[test]
+fn summary_generates_title_and_goal_from_items_via_llm() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "feat v3"]).assert().success();
+    seed_items(&env, "feat-v3"); // Tasks: 1,2 · Validation: 3
+    // a fake LLM: drains the piped prompt, returns the TITLE/GOAL contract
+    rein(&env, &env.repo)
+        .env(
+            "REIN_SUMMARY_CMD",
+            "cat >/dev/null; printf 'TITLE: v3 CLI ergonomics\\nGOAL: Round out the v3 CLI.\\nKeep it LLM-safe.\\n'",
+        )
+        .args(["summary", "feat-v3"])
         .assert()
         .success()
-        .stdout(
-            predicate::str::contains("Settings Cleanup")
-                .and(predicate::str::contains("Tidy the settings screen")),
-        );
+        .stdout(predicate::str::contains("summarized feat-v3"));
+    let doc = read(&store_root(&env).join("inbox/feat-v3.md"));
+    assert!(doc.contains("title: v3 CLI ergonomics"), "title not set: {}", doc);
+    assert!(
+        doc.contains("## Goal\n\nRound out the v3 CLI.\nKeep it LLM-safe."),
+        "goal not set from LLM output: {}",
+        doc
+    );
+    // the items it summarized are left untouched
+    assert!(doc.contains("Do thing one"));
+}
+
+#[test]
+fn summary_refuses_when_there_are_no_items() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "empty"]).assert().success();
+    rein(&env, &env.repo)
+        .env("REIN_SUMMARY_CMD", "printf 'TITLE: x\\nGOAL: y\\n'")
+        .args(["summary", "empty"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no checklist items"));
 }
 
 #[test]
