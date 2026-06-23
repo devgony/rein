@@ -129,14 +129,16 @@ impl Gh {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&out) else {
             return Vec::new();
         };
-        v.get("projects")
-            .and_then(|x| x.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|p| p.get("title").and_then(|t| t.as_str()).map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default()
+        // `gh project list --format json` may return either a top-level array or
+        // a `{ "projects": [...] }` object depending on the gh version — accept both.
+        let arr = v
+            .as_array()
+            .cloned()
+            .or_else(|| v.get("projects").and_then(|x| x.as_array()).cloned())
+            .unwrap_or_default();
+        arr.iter()
+            .filter_map(|p| p.get("title").and_then(|t| t.as_str()).map(str::to_string))
+            .collect()
     }
 
     pub fn issue_view_body(&self, number: u64) -> Result<String> {
