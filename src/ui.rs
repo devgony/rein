@@ -43,8 +43,8 @@ pub struct TaskRow {
     /// Claude runs are resolved from `claude agents`; Codex runs use rein's
     /// wrapper status file.
     pub run_state: Option<String>,
-    /// Active run-agent configuration for this row's project, shown in the meta
-    /// pane. `REIN_RUN_AGENT` overrides project git config.
+    /// Active run-agent name for this row's project, shown next to the scoped
+    /// project name. `REIN_RUN_AGENT` overrides project git config.
     pub run_agent_config: Option<String>,
     /// Isolated worktree path from the task's state, if it was started in
     /// worktree mode — distinguishes a worktree-backed task from a plain branch.
@@ -1396,18 +1396,29 @@ impl App {
                 ListItem::new(Line::from(spans))
             })
             .collect();
-        let title = format!(
-            " tasks [{} · {}] {} ",
-            self.scope_name(),
-            self.tab_name(),
-            if self.filter.is_empty() {
-                String::new()
-            } else {
-                format!("filter: {}", self.filter)
-            }
-        );
+        let mut title_parts = vec![self.scope_name()];
+        if let Some(agent) = self.scope_run_agent() {
+            title_parts.push(format!("agent: {}", agent));
+        }
+        title_parts.push(self.tab_name().to_string());
+        let filter = if self.filter.is_empty() {
+            String::new()
+        } else {
+            format!(" filter: {}", self.filter)
+        };
+        let title = format!(" tasks [{}]{} ", title_parts.join(" · "), filter);
         let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
         f.render_widget(list, area);
+    }
+
+    fn scope_run_agent(&self) -> Option<&str> {
+        let project = self.project_scope.as_deref()?;
+        self.tasks
+            .iter()
+            .find(|t| t.project == project)
+            .and_then(|t| t.run_agent_config.as_deref())
+            .map(run_agent_name)
+            .filter(|agent| !agent.is_empty())
     }
 
     fn render_preview(&self, f: &mut Frame, area: Rect) {
@@ -1534,7 +1545,6 @@ fn meta_lines(t: &TaskRow) -> Vec<Line<'static>> {
     } else {
         t.tags.join(", ")
     };
-    let agent = t.run_agent_config.clone().unwrap_or_else(dash);
     let (run_txt, run_color) = run_state_label(t.run_state.as_deref());
     // branch + how it's backed: an isolated worktree vs a plain main-repo branch
     let branch_txt = match (&t.branch, t.is_worktree()) {
@@ -1557,12 +1567,7 @@ fn meta_lines(t: &TaskRow) -> Vec<Line<'static>> {
             Span::styled("   run: ", dim),
             Span::styled(run_txt, Style::default().fg(run_color)),
         ]),
-        Line::from(vec![
-            Span::styled("agent: ", dim),
-            Span::raw(agent),
-            Span::styled("   dir: ", dim),
-            Span::raw(dir_txt),
-        ]),
+        Line::from(vec![Span::styled("dir: ", dim), Span::raw(dir_txt)]),
         Line::from(vec![
             Span::styled("issue: ", dim),
             Span::raw(issue),
@@ -1757,7 +1762,7 @@ fn configured_run_agent_label(info: &StoreInfo) -> Option<String> {
     if let Ok(agent) = std::env::var("REIN_RUN_AGENT") {
         let agent = agent.trim();
         if !agent.is_empty() {
-            return Some(format!("REIN_RUN_AGENT={agent}"));
+            return Some(agent.to_string());
         }
     }
     let repo_dir = info.repo_dir.as_ref()?;
@@ -1765,7 +1770,13 @@ fn configured_run_agent_label(info: &StoreInfo) -> Option<String> {
     repo.config_get("rein.runAgent")
         .map(|agent| agent.trim().to_string())
         .filter(|agent| !agent.is_empty())
-        .map(|agent| format!("rein.runAgent={agent}"))
+}
+
+fn run_agent_name(label: &str) -> &str {
+    label
+        .split_once('=')
+        .map_or(label, |(_, agent)| agent)
+        .trim()
 }
 
 /// Map of background session id → state (`working`/`done`/`failed`/…) from

@@ -561,14 +561,22 @@ fn run_state_shows_in_meta_and_list() {
 }
 
 #[test]
-fn meta_pane_shows_configured_run_agent() {
-    let mut row = rows();
-    row[0].run_agent_config = Some("rein.runAgent=codex".into());
-    let app = App::new(row);
+fn task_list_title_shows_configured_run_agent_for_scoped_project() {
+    let mut row = rows_in("acme/web");
+    for t in &mut row {
+        t.run_agent_config = Some("rein.runAgent=codex".into());
+    }
+    let mut app = App::new(row);
+    app.project_scope = Some("acme/web".into());
     let screen = draw(&app);
     assert!(
-        screen.contains("agent: rein.runAgent=codex"),
-        "meta pane should show the configured run agent: {}",
+        screen.contains("tasks [acme/web · agent: codex · all]"),
+        "task list title should show the configured run agent once by project: {}",
+        screen
+    );
+    assert!(
+        !screen.contains("agent: rein.runAgent=codex"),
+        "run agent should be shown as the bare backend name: {}",
         screen
     );
 }
