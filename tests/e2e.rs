@@ -1,5 +1,6 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
+use rein::{commands::sync_cmd, gitx::Repo, store::Store, Ctx};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -1645,6 +1646,35 @@ fn pr_pushes_branch_and_opens_draft_when_commits_exist() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("already has PR #7"));
+}
+
+#[test]
+fn push_task_branch_publishes_recorded_branch_to_origin() {
+    let env = setup();
+    init(&env);
+    add_origin(&env);
+    rein(&env, &env.repo)
+        .args(["new", "pushable"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "pushable", "--worktree"])
+        .assert()
+        .success();
+    let worktree = store_root(&env).join("worktrees/pushable");
+    commit_in(&env, &worktree, "feature.txt", "feature");
+    let branch_head = git(&env.home, &worktree, &["rev-parse", "HEAD"]);
+
+    let repo = Repo::discover(&env.repo).unwrap();
+    let store = Store {
+        root: store_root(&env),
+    };
+    let ctx = Ctx { repo, store };
+    let task = ctx.store.find("pushable").unwrap();
+    sync_cmd::push_task_branch(&ctx, &task).unwrap();
+
+    let remote_head = git(&env.home, &env.repo, &["rev-parse", "origin/pushable"]);
+    assert_eq!(remote_head, branch_head);
 }
 
 #[test]

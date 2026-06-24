@@ -2361,8 +2361,9 @@ fn event_loop(
             }
             UiAction::PushPr(id) => {
                 let r = match find_task(projects, &id) {
-                    Some((info, task)) => ctx_for(info)
-                        .and_then(|ctx| crate::commands::sync_cmd::push_pr(&ctx, &task, false)),
+                    Some((info, task)) => ctx_for(info).and_then(|ctx| {
+                        crate::commands::sync_cmd::push_pr_and_branch(&ctx, &task, false)
+                    }),
                     None => Err(anyhow!("task '{}' vanished", id)),
                 };
                 finish_push(app, projects, r, &id, ForceSurface::Pr);
@@ -2375,7 +2376,9 @@ fn event_loop(
                         ForceSurface::Issue => {
                             crate::commands::sync_cmd::push_issue(&ctx, &task, true)
                         }
-                        ForceSurface::Pr => crate::commands::sync_cmd::push_pr(&ctx, &task, true),
+                        ForceSurface::Pr => {
+                            crate::commands::sync_cmd::push_pr_and_branch(&ctx, &task, true)
+                        }
                     }),
                     None => Err(anyhow!("task '{}' vanished", id)),
                 };

@@ -242,6 +242,35 @@ pub fn push_pr(ctx: &Ctx, task: &TaskRef, force: bool) -> Result<()> {
     push_surface(ctx, &task, &gh, Surface::Pr(number), force)
 }
 
+/// Push the managed PR section, then push the task's recorded git branch.
+///
+/// This is used by the TUI `p` shortcut for an existing PR: the shortcut should
+/// publish both the task metadata and the commits that back the PR. If the task
+/// has no recorded branch, keep the historical body-sync behavior.
+pub fn push_pr_and_branch(ctx: &Ctx, task: &TaskRef, force: bool) -> Result<()> {
+    push_pr(ctx, task, force)?;
+    push_task_branch(ctx, task)
+}
+
+/// Push the task's recorded git branch to origin. If the task has no recorded
+/// branch, there is no deterministic branch to publish, so this is a no-op.
+pub fn push_task_branch(ctx: &Ctx, task: &TaskRef) -> Result<()> {
+    let task = ctx
+        .store
+        .find_by_id(&task.id)
+        .unwrap_or_else(|| task.clone());
+    let branch = task
+        .doc
+        .front
+        .branch
+        .clone()
+        .or_else(|| state::load(&ctx.store, &task.id).branch);
+    if let Some(branch) = branch {
+        ctx.repo.push_branch(&branch)?;
+    }
+    Ok(())
+}
+
 enum Surface {
     Issue(u64),
     Pr(u64),
