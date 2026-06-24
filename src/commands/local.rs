@@ -30,8 +30,39 @@ Rules:
 5. If a PR is attached, run `rein push` when finished.
 "#;
 
+const RUN_TASK_PROMPT: &str = r#"Use the run-rein-task skill to execute the current Rein task.
+
+Do not stop after listing `rein todo`. Run `rein todo`, execute every unchecked item it prints, and resolve each item with exactly one of:
+
+- `rein check <item-id>` after it is implemented and verified
+- `rein fail <item-id> --reason "<reason>"` when it cannot be completed
+
+Use `rein log "<text>" --item <item-id>` for item-scoped progress notes. Continue until `rein todo` prints no unchecked items, or every remaining item has been recorded with `rein fail`.
+
+Run-rein-task skill rules:
+
+---
+description: Run the current LLM task document, implement unchecked tasks, update status via rein commands, and append execution notes.
+disable-model-invocation: true
+---
+
+Run `rein todo` to list the current task's unchecked items. Each line is `<id>` then the item text, grouped under its `## section`. Read the full document with `rein current --path` only when you need the Goal or Notes for context.
+
+Rules:
+
+1. Execute only the unchecked items `rein todo` prints.
+2. Never edit checkboxes or Agent Log in the Markdown directly. Use:
+   - `rein check <item-id>` after a task is implemented and verified
+   - `rein log "<text>" --item <item-id>` to record progress on a specific item — `--item` is required and the entry is tagged so it shows under that item in `rein ui`
+   - `rein note "<text>"` to append an Agent Log entry not tied to any item
+   - `rein fail <item-id> --reason "<text>"` when blocked — resolves the item (it drops out of `rein todo`, so a re-run won't re-attempt it); `rein retry <item-id>` reopens it
+3. Preserve `<!-- task:... -->` ID comments when editing other sections.
+4. Run relevant tests before checking validation items.
+5. If a PR is attached, run `rein push` when finished.
+"#;
+
 pub(crate) fn run_task_prompt() -> &'static str {
-    SKILL_MD
+    RUN_TASK_PROMPT
 }
 
 pub fn init(skill: bool) -> Result<()> {
@@ -107,7 +138,11 @@ pub(crate) fn ensure_user_skill() -> Result<Option<std::path::PathBuf>> {
 
 /// Create an inbox task draft in `store`. Returns its id and document path.
 /// Store-only (no repo) so the TUI can create in any discovered project.
-pub fn create_task(store: &Store, title: &str, shared: bool) -> Result<(String, std::path::PathBuf)> {
+pub fn create_task(
+    store: &Store,
+    title: &str,
+    shared: bool,
+) -> Result<(String, std::path::PathBuf)> {
     let slug = store.unique_slug(&util::slugify(title));
     let id = format!("task-{}-{}", util::today_compact(), slug);
     let doc = TaskDoc::template(&id, title, "inbox", &util::now_iso(), shared);
@@ -232,7 +267,12 @@ pub fn status(ctx: &Ctx) -> Result<()> {
         None => println!("task: none"),
     }
     let tasks = ctx.store.list_tasks();
-    for s in [Status::Inbox, Status::Active, Status::Done, Status::Canceled] {
+    for s in [
+        Status::Inbox,
+        Status::Active,
+        Status::Done,
+        Status::Canceled,
+    ] {
         let count = tasks.iter().filter(|t| t.status == s).count();
         println!("{:<9} {}", s.as_str(), count);
     }

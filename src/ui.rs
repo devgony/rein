@@ -6,8 +6,10 @@ use crossterm::event::{
     self, DisableFocusChange, EnableFocusChange, Event, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers,
 };
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher};
 use ratatui::backend::CrosstermBackend;
@@ -96,26 +98,26 @@ pub enum UiAction {
     None,
     Quit,
     Edit(PathBuf),
-    New(String),             // create an inbox task with this title
+    New(String),              // create an inbox task with this title
     Start(String, StartMode), // claim inbox → active in the chosen mode
-    Move(String, Status),    // free-form transition to any state
+    Move(String, Status),     // free-form transition to any state
     Done(String),
-    Delete(String),          // permanently remove the task (files + worktree)
-    Issue(String),                       // begin creating an issue (offers a project picker)
+    Delete(String), // permanently remove the task (files + worktree)
+    Issue(String),  // begin creating an issue (offers a project picker)
     IssueWithProject(String, Option<String>), // create the issue, optionally onto a project board
-    PushIssue(String),                   // push the managed section to an existing issue
-    PushPr(String),                      // push the managed section to an existing PR
-    ForcePush(String, ForceSurface),     // overwrite the remote after a sync conflict (push --resolved)
+    PushIssue(String), // push the managed section to an existing issue
+    PushPr(String), // push the managed section to an existing PR
+    ForcePush(String, ForceSurface), // overwrite the remote after a sync conflict (push --resolved)
     CreatePr(String, bool), // open a draft PR; bool = worktree (vs main-repo branch)
-    CopyDir(PathBuf),       // copy the task's working directory path to the clipboard
-    Run(String),            // launch an agent on the task in the background
-    AttachRun(String),      // open the last background run in the native agent UI
-    Summary(String),        // LLM-summarize the task's items into title + Goal (rein owns the write)
+    CopyDir(PathBuf), // copy the task's working directory path to the clipboard
+    Run(String),    // launch an agent on the task in the background
+    AttachRun(String), // open the last background run in the native agent UI
+    Summary(String), // LLM-summarize the task's items into title + Goal (rein owns the write)
     ToggleItem(String, String), // task id + item id: flip its checkbox (reopens a failed item)
-    AddItem(String, String),    // task id + text: append a new checklist item to ## Tasks
+    AddItem(String, String), // task id + text: append a new checklist item to ## Tasks
     EditItem(String, String, String), // task id + item id + new text: reword a checklist item
     DeleteItem(String, String), // task id + item id: remove a checklist item
-    Worktrees(String),          // anchor task id: open the worktree view for its project's repo
+    Worktrees(String), // anchor task id: open the worktree view for its project's repo
     AddWorktree(String, String), // anchor task id + branch: git worktree add (-b if branch is new)
     DeleteWorktree(String, String), // anchor task id + worktree path: git worktree remove
     LockWorktree(String, String, bool), // anchor task id + path + lock(true)/unlock(false)
@@ -330,7 +332,9 @@ impl App {
 
     /// Label of the active project scope for display (`all` when unscoped).
     pub fn scope_name(&self) -> String {
-        self.project_scope.clone().unwrap_or_else(|| "all".to_string())
+        self.project_scope
+            .clone()
+            .unwrap_or_else(|| "all".to_string())
     }
 
     /// Indices into `tasks` visible under the project scope + tab + fuzzy filter.
@@ -464,8 +468,12 @@ impl App {
                                 .selected_task()
                                 .map(|t| task_items(&t.body))
                                 .unwrap_or_default();
-                            if let Some(it) = items.get(self.item_sel.min(items.len().saturating_sub(1))) {
-                                if let (Some(t), Some(item_id)) = (self.selected_task(), it.id.as_ref()) {
+                            if let Some(it) =
+                                items.get(self.item_sel.min(items.len().saturating_sub(1)))
+                            {
+                                if let (Some(t), Some(item_id)) =
+                                    (self.selected_task(), it.id.as_ref())
+                                {
                                     return UiAction::EditItem(t.id.clone(), item_id.clone(), text);
                                 }
                             }
@@ -644,7 +652,10 @@ impl App {
                 }
                 // copy the selected worktree's path to the clipboard
                 KeyCode::Char('y') => {
-                    if let Some(path) = self.worktrees.get(self.worktree_sel).map(|w| w.path.clone())
+                    if let Some(path) = self
+                        .worktrees
+                        .get(self.worktree_sel)
+                        .map(|w| w.path.clone())
                     {
                         return UiAction::CopyDir(path);
                     }
@@ -687,9 +698,7 @@ impl App {
                 _ => None,
             };
             if let Some(to) = target {
-                if let Some((id, status)) =
-                    self.selected_task().map(|t| (t.id.clone(), t.status))
-                {
+                if let Some((id, status)) = self.selected_task().map(|t| (t.id.clone(), t.status)) {
                     if status == to {
                         self.message = format!("already {}", to.as_str());
                     } else {
@@ -879,9 +888,7 @@ impl App {
             }
             KeyCode::Char('s') => match self.selected_task() {
                 Some(t) if t.status == Status::Inbox => self.starting = true,
-                Some(_) => {
-                    self.message = "only inbox tasks can be started (use m to move)".into()
-                }
+                Some(_) => self.message = "only inbox tasks can be started (use m to move)".into(),
                 None => {}
             },
             KeyCode::Char('d') => {
@@ -926,7 +933,9 @@ impl App {
             // summarize the task's checklist items into a title + Goal via the
             // configured LLM (the same `rein summary` path); needs items to work
             KeyCode::Char('S') => match self.selected_task() {
-                Some(t) if !task_items(&t.body).is_empty() => return UiAction::Summary(t.id.clone()),
+                Some(t) if !task_items(&t.body).is_empty() => {
+                    return UiAction::Summary(t.id.clone())
+                }
                 Some(_) => self.message = "no checklist items to summarize".into(),
                 None => self.message = "no task selected".into(),
             },
@@ -1126,8 +1135,7 @@ impl App {
                 ]))
             })
             .collect();
-        let list = List::new(list_items)
-            .block(Block::default().borders(Borders::ALL).title(title));
+        let list = List::new(list_items).block(Block::default().borders(Borders::ALL).title(title));
         f.render_widget(list, area);
     }
 
@@ -1209,7 +1217,10 @@ impl App {
                     spans.push(Span::styled(" [main]", Style::default().fg(Color::Magenta)));
                 }
                 if w.locked {
-                    spans.push(Span::styled(" [locked]", Style::default().fg(Color::Yellow)));
+                    spans.push(Span::styled(
+                        " [locked]",
+                        Style::default().fg(Color::Yellow),
+                    ));
                 }
                 if w.prunable {
                     spans.push(Span::styled(" [prunable]", Style::default().fg(Color::Red)));
@@ -1225,7 +1236,10 @@ impl App {
     /// path, branch/HEAD and flags — the read view of the CRUD.
     fn render_worktree_detail(&self, f: &mut Frame, area: Rect) {
         let dim = Style::default().fg(Color::DarkGray);
-        let lines: Vec<Line> = match self.worktrees.get(self.worktree_sel.min(self.worktrees.len().saturating_sub(1))) {
+        let lines: Vec<Line> = match self.worktrees.get(
+            self.worktree_sel
+                .min(self.worktrees.len().saturating_sub(1)),
+        ) {
             Some(w) => {
                 let branch = if w.bare {
                     "(bare)".to_string()
@@ -1247,9 +1261,16 @@ impl App {
                 if w.prunable {
                     flags.push("prunable");
                 }
-                let flags = if flags.is_empty() { "—".to_string() } else { flags.join(", ") };
+                let flags = if flags.is_empty() {
+                    "—".to_string()
+                } else {
+                    flags.join(", ")
+                };
                 vec![
-                    Line::from(vec![Span::styled("path:   ", dim), Span::raw(w.path.display().to_string())]),
+                    Line::from(vec![
+                        Span::styled("path:   ", dim),
+                        Span::raw(w.path.display().to_string()),
+                    ]),
                     Line::from(vec![Span::styled("branch: ", dim), Span::raw(branch)]),
                     Line::from(vec![Span::styled("HEAD:   ", dim), Span::raw(head)]),
                     Line::from(vec![Span::styled("flags:  ", dim), Span::raw(flags)]),
@@ -1407,10 +1428,16 @@ impl App {
     fn render_statusline(&self, f: &mut Frame, area: Rect) {
         let text = if self.creating_item {
             let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
-            format!("new item [{}]: {} · Enter add · Esc cancel", slug, self.input)
+            format!(
+                "new item [{}]: {} · Enter add · Esc cancel",
+                slug, self.input
+            )
         } else if self.editing_item {
             let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
-            format!("edit item [{}]: {} · Enter save · Esc cancel", slug, self.input)
+            format!(
+                "edit item [{}]: {} · Enter save · Esc cancel",
+                slug, self.input
+            )
         } else if self.deleting_item {
             let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
             format!("delete item from {}? [y]es · any other key cancels", slug)
@@ -1450,7 +1477,10 @@ impl App {
                 slug
             )
         } else if self.creating_worktree {
-            format!("new worktree branch: {} · Enter create · Esc cancel", self.input)
+            format!(
+                "new worktree branch: {} · Enter create · Esc cancel",
+                self.input
+            )
         } else if self.deleting_worktree {
             let name = self
                 .worktrees
@@ -1478,7 +1508,10 @@ impl App {
         };
         // a readable light gray so the hints stand out (the old dark gray was
         // too dim against most terminal backgrounds)
-        f.render_widget(Paragraph::new(text).style(Style::default().fg(Color::Gray)), area);
+        f.render_widget(
+            Paragraph::new(text).style(Style::default().fg(Color::Gray)),
+            area,
+        );
     }
 }
 
@@ -1487,9 +1520,16 @@ fn meta_lines(t: &TaskRow) -> Vec<Line<'static>> {
     let dim = Style::default().fg(Color::DarkGray);
     let dash = || "—".to_string();
     let date = |s: &str| s.get(..10).unwrap_or(s).to_string();
-    let issue = t.github_issue.map(|n| format!("#{}", n)).unwrap_or_else(dash);
+    let issue = t
+        .github_issue
+        .map(|n| format!("#{}", n))
+        .unwrap_or_else(dash);
     let pr = t.github_pr.map(|n| format!("#{}", n)).unwrap_or_else(dash);
-    let tags = if t.tags.is_empty() { dash() } else { t.tags.join(", ") };
+    let tags = if t.tags.is_empty() {
+        dash()
+    } else {
+        t.tags.join(", ")
+    };
     let (run_txt, run_color) = run_state_label(t.run_state.as_deref());
     // branch + how it's backed: an isolated worktree vs a plain main-repo branch
     let branch_txt = match (&t.branch, t.is_worktree()) {
@@ -1535,8 +1575,11 @@ fn meta_lines(t: &TaskRow) -> Vec<Line<'static>> {
 fn run_state_label(state: Option<&str>) -> (String, Color) {
     match state {
         Some("working") => ("running".into(), Color::Green),
+        Some("succeeded") => ("succeeded".into(), Color::Blue),
         Some("done") => ("done".into(), Color::Blue),
         Some("failed") => ("failed".into(), Color::Red),
+        Some("incomplete") => ("incomplete".into(), Color::Yellow),
+        Some("interrupted") => ("interrupted".into(), Color::Red),
         Some("blocked") => ("blocked".into(), Color::Yellow),
         Some("stopped") => ("stopped".into(), Color::DarkGray),
         Some(other) => (other.to_string(), Color::Gray),
@@ -1589,7 +1632,9 @@ pub fn render_markdown(body: &str) -> Vec<Line<'static>> {
         } else if line.starts_with("## ") {
             out.push(Line::styled(
                 line,
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ));
         } else if line.contains(crate::task::FAILED_SENTINEL) {
             // resolved-failed item: red + struck through (it carries a checked
@@ -1603,7 +1648,10 @@ pub fn render_markdown(body: &str) -> Vec<Line<'static>> {
         } else if line.trim_start().starts_with("- [x]") || line.trim_start().starts_with("- [X]") {
             // completed item: a deep, theme-independent green so it stands clearly
             // apart from the yellow open-item color (ANSI green reads olive on some themes)
-            out.push(Line::styled(line, Style::default().fg(Color::Rgb(0, 128, 0))));
+            out.push(Line::styled(
+                line,
+                Style::default().fg(Color::Rgb(0, 128, 0)),
+            ));
         } else if line.trim_start().starts_with("- [ ]") {
             out.push(Line::styled(line, Style::default().fg(Color::Yellow)));
         } else {
@@ -1734,7 +1782,10 @@ fn find_task<'a>(projects: &'a [StoreInfo], id: &str) -> Option<(&'a StoreInfo, 
 }
 
 /// Locate a task by its document path across every project.
-fn find_task_by_path<'a>(projects: &'a [StoreInfo], path: &Path) -> Option<(&'a StoreInfo, TaskRef)> {
+fn find_task_by_path<'a>(
+    projects: &'a [StoreInfo],
+    path: &Path,
+) -> Option<(&'a StoreInfo, TaskRef)> {
     projects.iter().find_map(|p| {
         p.store
             .list_tasks()
@@ -1763,10 +1814,7 @@ fn ctx_for(info: &StoreInfo) -> Result<Ctx> {
 /// GitHub Project picker to the right account. `None` if no remote is set.
 fn repo_owner(ctx: &Ctx) -> Option<String> {
     let remote = ctx.repo.remote_url()?;
-    let tail = remote
-        .trim()
-        .trim_end_matches('/')
-        .trim_end_matches(".git");
+    let tail = remote.trim().trim_end_matches('/').trim_end_matches(".git");
     // ssh: git@host:owner/repo  |  https: https://host/owner/repo
     let path = tail.rsplit_once(':').map(|(_, p)| p).unwrap_or(tail);
     let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
@@ -1852,16 +1900,17 @@ pub fn run() -> Result<()> {
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
     let result = event_loop(&mut terminal, &mut app, &projects);
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), DisableFocusChange, LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        DisableFocusChange,
+        LeaveAlternateScreen
+    )?;
     terminal.show_cursor()?;
     result
 }
 
 /// Suspend the TUI while $EDITOR owns the terminal, then restore it.
-fn open_editor(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    path: &Path,
-) -> Result<()> {
+fn open_editor(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, path: &Path) -> Result<()> {
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     let res = crate::commands::local::edit_file(path);
@@ -2026,9 +2075,13 @@ fn event_loop(
                         StartMode::Worktree => {
                             crate::commands::exec::start(&ctx, &task.slug, true, None, false)
                         }
-                        StartMode::Branch => {
-                            crate::commands::exec::start(&ctx, &task.slug, false, Some(&task.slug), false)
-                        }
+                        StartMode::Branch => crate::commands::exec::start(
+                            &ctx,
+                            &task.slug,
+                            false,
+                            Some(&task.slug),
+                            false,
+                        ),
                     }),
                     None => Err(anyhow!("task '{}' vanished", id)),
                 };
@@ -2045,9 +2098,8 @@ fn event_loop(
             }
             UiAction::Done(id) => {
                 let r = match find_task(projects, &id) {
-                    Some((info, _)) => {
-                        ctx_for(info).and_then(|ctx| crate::commands::exec::done(&ctx, Some(&id), false))
-                    }
+                    Some((info, _)) => ctx_for(info)
+                        .and_then(|ctx| crate::commands::exec::done(&ctx, Some(&id), false)),
                     None => Err(anyhow!("task '{}' vanished", id)),
                 };
                 finish(app, projects, r);
@@ -2066,9 +2118,9 @@ fn event_loop(
             UiAction::Issue(id) => {
                 // begin issue creation: offer an optional project picker, but only
                 // if the owner actually has Projects — otherwise create straight away
-                match find_task(projects, &id).and_then(|(info, task)| {
-                    ctx_for(info).ok().map(|ctx| (ctx, task))
-                }) {
+                match find_task(projects, &id)
+                    .and_then(|(info, task)| ctx_for(info).ok().map(|ctx| (ctx, task)))
+                {
                     Some((ctx, task)) => {
                         let owner = repo_owner(&ctx);
                         let gh = crate::gh::Gh::in_dir(&ctx.repo.workdir);
@@ -2116,7 +2168,9 @@ fn event_loop(
                 // single-surface `rein push --resolved` (overwrites the remote)
                 let r = match find_task(projects, &id) {
                     Some((info, task)) => ctx_for(info).and_then(|ctx| match surface {
-                        ForceSurface::Issue => crate::commands::sync_cmd::push_issue(&ctx, &task, true),
+                        ForceSurface::Issue => {
+                            crate::commands::sync_cmd::push_issue(&ctx, &task, true)
+                        }
                         ForceSurface::Pr => crate::commands::sync_cmd::push_pr(&ctx, &task, true),
                     }),
                     None => Err(anyhow!("task '{}' vanished", id)),
@@ -2135,8 +2189,9 @@ fn event_loop(
             }
             UiAction::CreatePr(id, worktree) => {
                 let r = match find_task(projects, &id) {
-                    Some((info, task)) => ctx_for(info)
-                        .and_then(|ctx| crate::commands::exec::create_pr(&ctx, Some(&task.slug), worktree)),
+                    Some((info, task)) => ctx_for(info).and_then(|ctx| {
+                        crate::commands::exec::create_pr(&ctx, Some(&task.slug), worktree)
+                    }),
                     None => Err(anyhow!("task '{}' vanished", id)),
                 };
                 finish(app, projects, r);
@@ -2322,8 +2377,9 @@ fn event_loop(
             }
             UiAction::LockWorktree(anchor, path, lock) => {
                 let r = match find_task(projects, &anchor) {
-                    Some((info, _)) => ctx_for(info)
-                        .and_then(|ctx| ctx.repo.worktree_lock(Path::new(&path), lock)),
+                    Some((info, _)) => {
+                        ctx_for(info).and_then(|ctx| ctx.repo.worktree_lock(Path::new(&path), lock))
+                    }
                     None => Err(anyhow!("task '{}' vanished", anchor)),
                 };
                 if let Err(e) = r {

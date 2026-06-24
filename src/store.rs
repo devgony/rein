@@ -95,7 +95,9 @@ impl Store {
     pub fn resolve(repo: &Repo) -> Result<Store> {
         if let Ok(root) = std::env::var("REIN_ROOT") {
             if !root.is_empty() {
-                return Ok(Store { root: PathBuf::from(root) });
+                return Ok(Store {
+                    root: PathBuf::from(root),
+                });
             }
         }
         let key = repo
@@ -112,12 +114,20 @@ impl Store {
         if let Ok(root) = std::env::var("REIN_ROOT") {
             if !root.is_empty() {
                 let key = repo.config_get("rein.store").unwrap_or_default();
-                return Ok((Store { root: PathBuf::from(root) }, key, false));
+                return Ok((
+                    Store {
+                        root: PathBuf::from(root),
+                    },
+                    key,
+                    false,
+                ));
             }
         }
         match repo.config_get("rein.store") {
             Some(key) => Ok((
-                Store { root: data_home().join("rein").join(&key) },
+                Store {
+                    root: data_home().join("rein").join(&key),
+                },
                 key,
                 false,
             )),
@@ -125,7 +135,9 @@ impl Store {
                 let key = uuid::Uuid::new_v4().to_string();
                 repo.config_set("rein.store", &key)?;
                 Ok((
-                    Store { root: data_home().join("rein").join(&key) },
+                    Store {
+                        root: data_home().join("rein").join(&key),
+                    },
                     key,
                     true,
                 ))
@@ -154,7 +166,9 @@ impl Store {
             None => (None, None),
         };
         // common_dir is the `.git` dir; its parent is the repo working tree.
-        let repo_dir = common_dir.as_ref().and_then(|c| c.parent().map(PathBuf::from));
+        let repo_dir = common_dir
+            .as_ref()
+            .and_then(|c| c.parent().map(PathBuf::from));
         let project = remote
             .as_deref()
             .and_then(owner_repo_from_remote)
@@ -257,7 +271,12 @@ impl Store {
 
     pub fn list_tasks(&self) -> Vec<TaskRef> {
         let mut out = Vec::new();
-        for status in [Status::Inbox, Status::Active, Status::Done, Status::Canceled] {
+        for status in [
+            Status::Inbox,
+            Status::Active,
+            Status::Done,
+            Status::Canceled,
+        ] {
             for path in Self::md_files(&self.status_dir(status)) {
                 if let Some(t) = Self::read_task(&path, status) {
                     out.push(t);
@@ -427,9 +446,15 @@ mod tests {
         assert_eq!(infos.len(), 2);
         // sorted by project name: "acme/web" < "tools"
         assert_eq!(infos[0].project, "acme/web");
-        assert_eq!(infos[0].repo_dir.as_deref(), Some(Path::new("/home/me/web")));
+        assert_eq!(
+            infos[0].repo_dir.as_deref(),
+            Some(Path::new("/home/me/web"))
+        );
         assert_eq!(infos[1].project, "tools");
-        assert_eq!(infos[1].repo_dir.as_deref(), Some(Path::new("/home/me/tools")));
+        assert_eq!(
+            infos[1].repo_dir.as_deref(),
+            Some(Path::new("/home/me/tools"))
+        );
     }
 
     #[test]

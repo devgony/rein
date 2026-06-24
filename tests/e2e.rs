@@ -84,9 +84,17 @@ fn store_root(env: &Env) -> PathBuf {
 
 /// Add a bare `origin` remote and push `main`, so PR creation can push branches.
 fn add_origin(env: &Env) {
-    git(&env.home, env._tmp.path(), &["init", "--bare", "origin.git"]);
+    git(
+        &env.home,
+        env._tmp.path(),
+        &["init", "--bare", "origin.git"],
+    );
     let url = env._tmp.path().join("origin.git");
-    git(&env.home, &env.repo, &["remote", "add", "origin", url.to_str().unwrap()]);
+    git(
+        &env.home,
+        &env.repo,
+        &["remote", "add", "origin", url.to_str().unwrap()],
+    );
     git(&env.home, &env.repo, &["push", "origin", "main"]);
 }
 
@@ -306,9 +314,18 @@ fn new_creates_inbox_doc_with_slug_collision() {
 fn list_filters_by_status() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "alpha"]).assert().success();
-    rein(&env, &env.repo).args(["new", "beta"]).assert().success();
-    rein(&env, &env.repo).args(["start", "alpha"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "alpha"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["new", "beta"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "alpha"])
+        .assert()
+        .success();
     rein(&env, &env.repo)
         .args(["list", "--status", "inbox"])
         .assert()
@@ -325,8 +342,14 @@ fn list_filters_by_status() {
 fn start_claims_task_single_mode() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "demo task"]).assert().success();
-    rein(&env, &env.repo).args(["start", "demo-task"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "demo task"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "demo-task"])
+        .assert()
+        .success();
 
     let root = store_root(&env);
     assert!(!root.join("inbox/demo-task.md").exists());
@@ -360,7 +383,10 @@ fn start_claims_task_single_mode() {
 fn start_worktree_binds_task_by_cwd() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "feat one"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "feat one"])
+        .assert()
+        .success();
     rein(&env, &env.repo)
         .args(["start", "feat-one", "--worktree"])
         .assert()
@@ -384,8 +410,14 @@ fn start_worktree_binds_task_by_cwd() {
     rein(&env, &env.repo).arg("current").assert().failure();
 
     // a second task started in single mode does not disturb the worktree binding
-    rein(&env, &env.repo).args(["new", "feat two"]).assert().success();
-    rein(&env, &env.repo).args(["start", "feat-two"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "feat two"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "feat-two"])
+        .assert()
+        .success();
     let id2 = task_id(&env, "active", "feat-two");
     rein(&env, &env.repo)
         .arg("current")
@@ -407,17 +439,29 @@ fn start_worktree_binds_task_by_cwd() {
 fn mutations_check_uncheck_log_fail() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "demo"])
+        .assert()
+        .success();
     seed_items(&env, "demo");
-    rein(&env, &env.repo).args(["start", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["start", "demo"])
+        .assert()
+        .success();
     let root = store_root(&env);
     let path = root.join("active/demo.md");
 
     // mutation assigns stable integer IDs on the spot — no GitHub needed
-    rein(&env, &env.repo).args(["check", "1"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["check", "1"])
+        .assert()
+        .success();
     assert!(read(&path).contains("- [x] <!-- task:1 --> Do thing one"));
 
-    rein(&env, &env.repo).args(["uncheck", "1"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["uncheck", "1"])
+        .assert()
+        .success();
     assert!(read(&path).contains("- [ ] <!-- task:1 --> Do thing one"));
 
     // log is item-scoped: --item ties the entry to a checklist item and the
@@ -456,7 +500,10 @@ fn mutations_check_uncheck_log_fail() {
     assert!(doc.contains("- [x] <!-- task:1 --> <!-- failed --> ~~Do thing one~~ ❌"));
 
     // retry reopens it: back to an unchecked, undecorated item + a RETRY log line
-    rein(&env, &env.repo).args(["retry", "1"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["retry", "1"])
+        .assert()
+        .success();
     let doc = read(&path);
     assert!(doc.contains("- [ ] <!-- task:1 --> Do thing one"));
     assert!(doc.contains("Task1: RETRY"));
@@ -466,19 +513,30 @@ fn mutations_check_uncheck_log_fail() {
         .args(["check", "99"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("available items").and(predicate::str::contains("1, 2, 3")));
+        .stderr(
+            predicate::str::contains("available items").and(predicate::str::contains("1, 2, 3")),
+        );
 }
 
 #[test]
 fn local_check_assigns_integer_ids_without_github() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "demo"])
+        .assert()
+        .success();
     seed_items(&env, "demo"); // 3 items, no IDs, fully offline
-    rein(&env, &env.repo).args(["start", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["start", "demo"])
+        .assert()
+        .success();
 
     // single integer sequence across Tasks(1,2) and Validation(3)
-    rein(&env, &env.repo).args(["check", "2"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["check", "2"])
+        .assert()
+        .success();
     let doc = read(&store_root(&env).join("active/demo.md"));
     assert!(doc.contains("- [ ] <!-- task:1 --> Do thing one"));
     assert!(doc.contains("- [x] <!-- task:2 --> Add tests later"));
@@ -489,10 +547,19 @@ fn local_check_assigns_integer_ids_without_github() {
 fn ids_are_stable_under_reorder() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "demo"])
+        .assert()
+        .success();
     seed_items(&env, "demo");
-    rein(&env, &env.repo).args(["start", "demo"]).assert().success();
-    rein(&env, &env.repo).args(["check", "1"]).assert().success(); // assigns 1,2,3
+    rein(&env, &env.repo)
+        .args(["start", "demo"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["check", "1"])
+        .assert()
+        .success(); // assigns 1,2,3
     let path = store_root(&env).join("active/demo.md");
 
     // a human reorders items (task:2 above task:1) and inserts a new one,
@@ -506,7 +573,10 @@ fn ids_are_stable_under_reorder() {
     fs::write(&path, reordered).unwrap();
 
     // checking 2 still hits "Add tests later" despite the move — id is identity, not position
-    rein(&env, &env.repo).args(["check", "2"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["check", "2"])
+        .assert()
+        .success();
     let doc = read(&path);
     assert!(doc.contains("- [x] <!-- task:2 --> Add tests later"));
     // the inserted item gets the next integer (4), never a reused one
@@ -517,9 +587,15 @@ fn ids_are_stable_under_reorder() {
 fn check_with_task_arg_gives_helpful_error() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "demo"])
+        .assert()
+        .success();
     seed_items(&env, "demo");
-    rein(&env, &env.repo).args(["start", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["start", "demo"])
+        .assert()
+        .success();
     let id = task_id(&env, "active", "demo");
 
     // the exact mistake from the bug report: passing a task id to `check`
@@ -534,10 +610,16 @@ fn check_with_task_arg_gives_helpful_error() {
 fn open_assigns_ids_after_editor() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "demo"])
+        .assert()
+        .success();
     seed_items(&env, "demo"); // items lack IDs
-    // EDITOR=true is a no-op edit; open must still heal IDs on return
-    rein(&env, &env.repo).args(["open", "demo"]).assert().success();
+                              // EDITOR=true is a no-op edit; open must still heal IDs on return
+    rein(&env, &env.repo)
+        .args(["open", "demo"])
+        .assert()
+        .success();
     let doc = read(&store_root(&env).join("inbox/demo.md"));
     assert!(doc.contains("<!-- task:1 -->"));
     assert!(doc.contains("<!-- task:2 -->"));
@@ -548,9 +630,15 @@ fn open_assigns_ids_after_editor() {
 fn status_lists_items_with_numbers() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "demo"])
+        .assert()
+        .success();
     seed_items(&env, "demo");
-    rein(&env, &env.repo).args(["start", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["start", "demo"])
+        .assert()
+        .success();
     rein(&env, &env.repo)
         .arg("status")
         .assert()
@@ -566,34 +654,35 @@ fn status_lists_items_with_numbers() {
 fn todo_lists_unchecked_items_grouped_by_section() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "demo"])
+        .assert()
+        .success();
     seed_items(&env, "demo"); // Tasks: 1,2 · Validation: 3
-    rein(&env, &env.repo).args(["start", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["start", "demo"])
+        .assert()
+        .success();
 
     // default: only unchecked items, grouped under their section headings
-    rein(&env, &env.repo)
-        .arg("todo")
-        .assert()
-        .success()
-        .stdout(
-            predicate::str::contains("## Tasks")
-                .and(predicate::str::contains("## Validation"))
-                .and(predicate::str::contains("1\tDo thing one"))
-                .and(predicate::str::contains("2\tAdd tests later"))
-                .and(predicate::str::contains("3\tTests pass")),
-        );
+    rein(&env, &env.repo).arg("todo").assert().success().stdout(
+        predicate::str::contains("## Tasks")
+            .and(predicate::str::contains("## Validation"))
+            .and(predicate::str::contains("1\tDo thing one"))
+            .and(predicate::str::contains("2\tAdd tests later"))
+            .and(predicate::str::contains("3\tTests pass")),
+    );
 
     // checked items drop out of the list
-    rein(&env, &env.repo).args(["check", "2"]).assert().success();
     rein(&env, &env.repo)
-        .arg("todo")
+        .args(["check", "2"])
         .assert()
-        .success()
-        .stdout(
-            predicate::str::contains("Do thing one")
-                .and(predicate::str::contains("Tests pass"))
-                .and(predicate::str::contains("Add tests later").not()),
-        );
+        .success();
+    rein(&env, &env.repo).arg("todo").assert().success().stdout(
+        predicate::str::contains("Do thing one")
+            .and(predicate::str::contains("Tests pass"))
+            .and(predicate::str::contains("Add tests later").not()),
+    );
 
     // --all shows every item with its state
     rein(&env, &env.repo)
@@ -606,7 +695,10 @@ fn todo_lists_unchecked_items_grouped_by_section() {
         );
 
     // --task targets a specific task regardless of resolution
-    rein(&env, &env.repo).args(["new", "other"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "other"])
+        .assert()
+        .success();
     rein(&env, &env.repo)
         .args(["todo", "--task", "demo"])
         .assert()
@@ -618,9 +710,15 @@ fn todo_lists_unchecked_items_grouped_by_section() {
 fn fail_drops_item_from_todo_until_retried() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "demo"])
+        .assert()
+        .success();
     seed_items(&env, "demo"); // Tasks: 1,2 · Validation: 3
-    rein(&env, &env.repo).args(["start", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["start", "demo"])
+        .assert()
+        .success();
 
     // fail item 1 → it drops out of the default todo list (won't be re-attempted)
     rein(&env, &env.repo)
@@ -641,7 +739,10 @@ fn fail_drops_item_from_todo_until_retried() {
         .stdout(predicate::str::contains("1\t[!] Do thing one"));
 
     // retry reopens it → back on the default list
-    rein(&env, &env.repo).args(["retry", "1"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["retry", "1"])
+        .assert()
+        .success();
     rein(&env, &env.repo)
         .arg("todo")
         .assert()
@@ -661,17 +762,24 @@ fn mutation_gate_refuses_ambiguous_current() {
     let env = setup();
     init(&env);
     for title in ["one", "two"] {
-        rein(&env, &env.repo).args(["new", title]).assert().success();
+        rein(&env, &env.repo)
+            .args(["new", title])
+            .assert()
+            .success();
         let path = store_root(&env).join("inbox").join(format!("{}.md", title));
-        let content = read(&path).replace(
-            "## Tasks\n",
-            "## Tasks\n\n- [ ] <!-- task:1 --> Do thing\n",
-        );
+        let content =
+            read(&path).replace("## Tasks\n", "## Tasks\n\n- [ ] <!-- task:1 --> Do thing\n");
         fs::write(path, content).unwrap();
     }
     // two active tasks, current points at the last
-    rein(&env, &env.repo).args(["start", "one"]).assert().success();
-    rein(&env, &env.repo).args(["start", "two"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["start", "one"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "two"])
+        .assert()
+        .success();
 
     rein(&env, &env.repo)
         .args(["note", "hello"])
@@ -707,11 +815,23 @@ fn mutation_gate_refuses_ambiguous_current() {
 fn resolution_order_flag_env_current() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "one"]).assert().success();
-    rein(&env, &env.repo).args(["new", "two"]).assert().success();
-    rein(&env, &env.repo).args(["start", "one"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "one"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["new", "two"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "one"])
+        .assert()
+        .success();
     let id_one = task_id(&env, "active", "one");
-    rein(&env, &env.repo).args(["use", "two"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["use", "two"])
+        .assert()
+        .success();
     let id_two = task_id(&env, "inbox", "two");
     assert_eq!(read(&store_root(&env).join("current")).trim(), id_two);
 
@@ -736,8 +856,14 @@ fn resolution_order_flag_env_current() {
 fn use_rebinds_worktree_pointer() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "one"]).assert().success();
-    rein(&env, &env.repo).args(["new", "two"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "one"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["new", "two"])
+        .assert()
+        .success();
     rein(&env, &env.repo)
         .args(["start", "one", "--worktree"])
         .assert()
@@ -758,7 +884,10 @@ fn use_rebinds_worktree_pointer() {
 fn done_preflight_and_worktree_cleanup() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "dirty job"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "dirty job"])
+        .assert()
+        .success();
     rein(&env, &env.repo)
         .args(["start", "dirty-job", "--worktree"])
         .assert()
@@ -801,7 +930,10 @@ fn done_preflight_and_worktree_cleanup() {
 fn done_keep_worktree() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "keepwt"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "keepwt"])
+        .assert()
+        .success();
     rein(&env, &env.repo)
         .args(["start", "keepwt", "--worktree"])
         .assert()
@@ -814,14 +946,21 @@ fn done_keep_worktree() {
         .success();
     assert!(wt.exists(), "worktree should be kept");
     let month = chrono::Local::now().format("%Y-%m").to_string();
-    assert!(store_root(&env).join("done").join(&month).join("keepwt.md").exists());
+    assert!(store_root(&env)
+        .join("done")
+        .join(&month)
+        .join("keepwt.md")
+        .exists());
 }
 
 #[test]
 fn cancel_force_discards_dirty_worktree() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "byebye"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "byebye"])
+        .assert()
+        .success();
     rein(&env, &env.repo)
         .args(["start", "byebye", "--worktree"])
         .assert()
@@ -848,8 +987,14 @@ fn delete_removes_inbox_task_files() {
     let env = setup();
     init(&env);
     let root = store_root(&env);
-    rein(&env, &env.repo).args(["new", "scratch"]).assert().success();
-    rein(&env, &env.repo).args(["start", "scratch"]).assert().success(); // single mode → current pointer
+    rein(&env, &env.repo)
+        .args(["new", "scratch"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "scratch"])
+        .assert()
+        .success(); // single mode → current pointer
     let id = task_id(&env, "active", "scratch");
     assert_eq!(read(&root.join("current")).trim(), id);
 
@@ -861,7 +1006,10 @@ fn delete_removes_inbox_task_files() {
         .stdout(predicate::str::contains("deleted").and(predicate::str::contains(&id)));
     assert!(!root.join("active/scratch.md").exists());
     assert!(!root.join("state").join(format!("{}.json", id)).exists());
-    assert!(!root.join("current").exists(), "current pointer must be cleared");
+    assert!(
+        !root.join("current").exists(),
+        "current pointer must be cleared"
+    );
 
     // deleting a vanished task errors
     rein(&env, &env.repo)
@@ -875,7 +1023,10 @@ fn delete_removes_inbox_task_files() {
 fn delete_refuses_dirty_worktree_unless_forced() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "wt task"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "wt task"])
+        .assert()
+        .success();
     rein(&env, &env.repo)
         .args(["start", "wt-task", "--worktree"])
         .assert()
@@ -901,7 +1052,10 @@ fn delete_refuses_dirty_worktree_unless_forced() {
         .stdout(predicate::str::contains("removed worktree"));
     assert!(!wt.exists());
     assert!(!store_root(&env).join("active/wt-task.md").exists());
-    assert!(!store_root(&env).join("state").join(format!("{}.json", id)).exists());
+    assert!(!store_root(&env)
+        .join("state")
+        .join(format!("{}.json", id))
+        .exists());
 }
 
 #[test]
@@ -909,7 +1063,10 @@ fn move_transitions_any_direction_without_side_effects() {
     let env = setup();
     init(&env);
     let root = store_root(&env);
-    rein(&env, &env.repo).args(["new", "wander"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "wander"])
+        .assert()
+        .success();
 
     // inbox → active is a plain relocation: no current pointer, no worktree
     rein(&env, &env.repo)
@@ -920,7 +1077,10 @@ fn move_transitions_any_direction_without_side_effects() {
     assert!(root.join("active/wander.md").exists());
     assert!(!root.join("inbox/wander.md").exists());
     assert!(read(&root.join("active/wander.md")).contains("status: active"));
-    assert!(!root.join("current").exists(), "move must not claim current");
+    assert!(
+        !root.join("current").exists(),
+        "move must not claim current"
+    );
 
     // active → done, then the previously-impossible backward hop done → inbox
     rein(&env, &env.repo)
@@ -960,8 +1120,14 @@ fn move_transitions_any_direction_without_side_effects() {
 fn doctor_rebuilds_state_and_fixes_drift() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "alpha"]).assert().success();
-    rein(&env, &env.repo).args(["new", "beta"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "alpha"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["new", "beta"])
+        .assert()
+        .success();
     let root = store_root(&env);
     let id_alpha = task_id(&env, "inbox", "alpha");
 
@@ -981,7 +1147,10 @@ fn doctor_rebuilds_state_and_fixes_drift() {
         );
 
     // state regenerated for both, frontmatter fixed, current cleared
-    assert!(root.join("state").join(format!("{}.json", id_alpha)).is_file());
+    assert!(root
+        .join("state")
+        .join(format!("{}.json", id_alpha))
+        .is_file());
     assert!(read(&root.join("active/alpha.md")).contains("status: active"));
     assert!(!root.join("current").exists());
 }
@@ -1002,8 +1171,14 @@ fn root_prints_store_path() {
 fn status_reports_counts() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "one"]).assert().success();
-    rein(&env, &env.repo).args(["start", "one"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "one"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "one"])
+        .assert()
+        .success();
     rein(&env, &env.repo)
         .arg("status")
         .assert()
@@ -1024,7 +1199,10 @@ fn issue_publishes_projection_and_assigns_ids() {
     let env = setup();
     init(&env);
     let gh = fake_gh(&env);
-    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "demo"])
+        .assert()
+        .success();
     seed_items(&env, "demo");
 
     let mut c = rein(&env, &env.repo);
@@ -1073,7 +1251,10 @@ fn issue_with_project_flag_files_onto_board() {
     let env = setup();
     init(&env);
     let gh = fake_gh(&env);
-    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "demo"])
+        .assert()
+        .success();
     seed_items(&env, "demo");
 
     // --project passes the board name through to `gh issue create --project`
@@ -1097,12 +1278,18 @@ fn push_local_change_preserves_human_text() {
     let env = setup();
     init(&env);
     let gh = fake_gh(&env);
-    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "demo"])
+        .assert()
+        .success();
     seed_items(&env, "demo");
     let mut c = rein(&env, &env.repo);
     gh.apply(&mut c);
     c.args(["issue", "demo"]).assert().success();
-    rein(&env, &env.repo).args(["use", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["use", "demo"])
+        .assert()
+        .success();
 
     // remote = exactly what we published, plus human text outside markers
     let published = read(&gh.create_body);
@@ -1141,12 +1328,18 @@ fn pull_applies_remote_change_and_keeps_log() {
     let env = setup();
     init(&env);
     let gh = fake_gh(&env);
-    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "demo"])
+        .assert()
+        .success();
     seed_items(&env, "demo");
     let mut c = rein(&env, &env.repo);
     gh.apply(&mut c);
     c.args(["issue", "demo"]).assert().success();
-    rein(&env, &env.repo).args(["use", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["use", "demo"])
+        .assert()
+        .success();
     rein(&env, &env.repo)
         .args(["note", "local progress note"])
         .assert()
@@ -1167,7 +1360,10 @@ fn pull_applies_remote_change_and_keeps_log() {
 
     let doc = read(&store_root(&env).join("inbox/demo.md"));
     assert!(doc.contains("Do thing one EDITED"));
-    assert!(doc.contains("local progress note"), "Agent Log must survive pull");
+    assert!(
+        doc.contains("local progress note"),
+        "Agent Log must survive pull"
+    );
 
     // pulling again: up to date
     let mut c = rein(&env, &env.repo);
@@ -1183,12 +1379,18 @@ fn conflict_detected_then_resolved() {
     let env = setup();
     init(&env);
     let gh = fake_gh(&env);
-    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "demo"])
+        .assert()
+        .success();
     seed_items(&env, "demo");
     let mut c = rein(&env, &env.repo);
     gh.apply(&mut c);
     c.args(["issue", "demo"]).assert().success();
-    rein(&env, &env.repo).args(["use", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["use", "demo"])
+        .assert()
+        .success();
 
     // both sides diverge
     let published = read(&gh.create_body);
@@ -1271,8 +1473,14 @@ fn pull_inbox_is_idempotent() {
 fn attach_issue_links_and_hints() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
-    rein(&env, &env.repo).args(["use", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "demo"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["use", "demo"])
+        .assert()
+        .success();
     rein(&env, &env.repo)
         .args(["attach-issue", "55"])
         .assert()
@@ -1290,14 +1498,23 @@ fn attach_pr_push_renders_managed_section_with_folded_log() {
     let env = setup();
     init(&env);
     let gh = fake_gh(&env);
-    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "demo"])
+        .assert()
+        .success();
     seed_items(&env, "demo");
-    rein(&env, &env.repo).args(["use", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["use", "demo"])
+        .assert()
+        .success();
     rein(&env, &env.repo)
         .args(["note", "agent did a thing"])
         .assert()
         .success();
-    rein(&env, &env.repo).args(["attach-pr", "7"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["attach-pr", "7"])
+        .assert()
+        .success();
 
     gh.set_pr_view_body("Reviewer notes stay.\n");
     let mut c = rein(&env, &env.repo);
@@ -1321,7 +1538,10 @@ fn start_draft_pr_warns_without_commits() {
     let env = setup();
     init(&env);
     let gh = fake_gh(&env);
-    rein(&env, &env.repo).args(["new", "feat"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "feat"])
+        .assert()
+        .success();
     // a freshly claimed branch has no commits → PR creation warns, none is made
     let mut c = rein(&env, &env.repo);
     gh.apply(&mut c);
@@ -1338,7 +1558,10 @@ fn start_draft_pr_warns_without_commits() {
 fn pr_inbox_worktree_warns_without_commits() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "feat"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "feat"])
+        .assert()
+        .success();
     // the worktree is created under the store, but with no commits the PR warns
     rein(&env, &env.repo)
         .args(["pr", "feat", "--worktree"])
@@ -1348,8 +1571,14 @@ fn pr_inbox_worktree_warns_without_commits() {
             predicate::str::contains("no commits on 'feat'")
                 .and(predicate::str::contains("rein pr")),
         );
-    assert!(store_root(&env).join("worktrees/feat").is_dir(), "worktree not under store");
-    assert!(!env._tmp.path().join("proj-wt/feat").exists(), "should not litter parent dir");
+    assert!(
+        store_root(&env).join("worktrees/feat").is_dir(),
+        "worktree not under store"
+    );
+    assert!(
+        !env._tmp.path().join("proj-wt/feat").exists(),
+        "should not litter parent dir"
+    );
     assert!(!read(&store_root(&env).join("active/feat.md")).contains("github_pr: 7"));
 }
 
@@ -1357,7 +1586,10 @@ fn pr_inbox_worktree_warns_without_commits() {
 fn pr_branch_mode_creates_branch_but_warns_without_commits() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "alpha"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "alpha"])
+        .assert()
+        .success();
     rein(&env, &env.repo)
         .args(["pr", "alpha"])
         .assert()
@@ -1375,13 +1607,21 @@ fn pr_pushes_branch_and_opens_draft_when_commits_exist() {
     init(&env);
     add_origin(&env);
     let gh = fake_gh(&env);
-    rein(&env, &env.repo).args(["new", "beta"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "beta"])
+        .assert()
+        .success();
     rein(&env, &env.repo)
         .args(["start", "beta", "--worktree"])
         .assert()
         .success();
     // do work in the worktree so the branch has a commit ahead of main
-    commit_in(&env, &store_root(&env).join("worktrees/beta"), "feature.txt", "work");
+    commit_in(
+        &env,
+        &store_root(&env).join("worktrees/beta"),
+        "feature.txt",
+        "work",
+    );
     // active task with commits → push the branch + open the draft PR
     let mut c = rein(&env, &env.repo);
     gh.apply(&mut c);
@@ -1393,7 +1633,11 @@ fn pr_pushes_branch_and_opens_draft_when_commits_exist() {
     assert!(gh.log_text().contains("pr create --draft"));
     // the branch was pushed to origin
     let remotes = git(&env.home, &env.repo, &["branch", "-r"]);
-    assert!(remotes.contains("origin/beta"), "branch not pushed: {}", remotes);
+    assert!(
+        remotes.contains("origin/beta"),
+        "branch not pushed: {}",
+        remotes
+    );
     // a second PR is refused
     let mut c2 = rein(&env, &env.repo);
     gh.apply(&mut c2);
@@ -1409,14 +1653,28 @@ fn pr_body_is_resolves_when_task_is_issue_linked() {
     init(&env);
     add_origin(&env);
     let gh = fake_gh(&env);
-    rein(&env, &env.repo).args(["new", "gamma"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "gamma"])
+        .assert()
+        .success();
     // link an issue to the task, then start it in a worktree with a commit
-    rein(&env, &env.repo).args(["use", "gamma"]).assert().success();
-    rein(&env, &env.repo).args(["attach-issue", "41"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["use", "gamma"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["attach-issue", "41"])
+        .assert()
+        .success();
     let mut c = rein(&env, &env.repo);
     gh.apply(&mut c);
     c.args(["start", "gamma", "--worktree"]).assert().success();
-    commit_in(&env, &store_root(&env).join("worktrees/gamma"), "feature.txt", "work");
+    commit_in(
+        &env,
+        &store_root(&env).join("worktrees/gamma"),
+        "feature.txt",
+        "work",
+    );
 
     // the issue already holds the managed task description, so the PR body is just
     // GitHub's closing keyword — no duplicated task block
@@ -1428,27 +1686,36 @@ fn pr_body_is_resolves_when_task_is_issue_linked() {
         .stdout(predicate::str::contains("draft PR: #7"));
     let body = read(&gh.pr_create_body);
     assert_eq!(body.trim(), "resolves #41", "issue-linked PR body");
-    assert!(!body.contains("rein:begin"), "PR body must not duplicate the managed block");
+    assert!(
+        !body.contains("rein:begin"),
+        "PR body must not duplicate the managed block"
+    );
 
     // Subsequent pushes keep the PR unmanaged; only the issue surface receives the block.
     gh.set_issue_view_body("issue notes stay.\n");
     let mut c = rein(&env, &env.repo);
     gh.apply(&mut c);
-    c.arg("push")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("issue #41: pushed").and(predicate::str::contains("PR #7: unmanaged")));
+    c.arg("push").assert().success().stdout(
+        predicate::str::contains("issue #41: pushed")
+            .and(predicate::str::contains("PR #7: unmanaged")),
+    );
     let log = gh.log_text();
     assert!(log.contains("issue edit 41"), "log: {}", log);
     assert!(!log.contains("pr edit 7"), "log: {}", log);
-    assert!(!gh.pr_edit_body.exists(), "issue-linked PR body must not be edited");
+    assert!(
+        !gh.pr_edit_body.exists(),
+        "issue-linked PR body must not be edited"
+    );
 }
 
 #[test]
 fn pr_reports_actionable_error_when_branch_exists() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "dup"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "dup"])
+        .assert()
+        .success();
     // a leftover branch from an earlier run collides with the task slug
     git(&env.home, &env.repo, &["branch", "dup"]);
     rein(&env, &env.repo)
@@ -1490,13 +1757,22 @@ fn make_executable(path: &Path) {
 fn run_launches_agent_in_worktree_with_task_env() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "job"]).assert().success();
-    rein(&env, &env.repo).args(["start", "job", "--worktree"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "job"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "job", "--worktree"])
+        .assert()
+        .success();
     let marker = env.bin_dir.join("run_marker.txt");
     let mut c = rein(&env, &env.repo);
     c.env(
         "REIN_RUN_CMD",
-        format!("printf '%s|%s' \"$REIN_TASK\" \"$REIN_DIR\" > {}", marker.display()),
+        format!(
+            "printf '%s|%s' \"$REIN_TASK\" \"$REIN_DIR\" > {}",
+            marker.display()
+        ),
     );
     c.args(["run", "job"])
         .assert()
@@ -1505,35 +1781,61 @@ fn run_launches_agent_in_worktree_with_task_env() {
     let content = wait_for(&marker);
     let id = task_id(&env, "active", "job");
     assert!(content.contains(&id), "REIN_TASK not set: {}", content);
-    assert!(content.contains("worktrees/job"), "REIN_DIR not the worktree: {}", content);
+    assert!(
+        content.contains("worktrees/job"),
+        "REIN_DIR not the worktree: {}",
+        content
+    );
 }
 
 #[test]
 fn run_without_worktree_uses_repo_root_and_warns() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "solo"]).assert().success();
-    rein(&env, &env.repo).args(["start", "solo"]).assert().success(); // single mode, no worktree
+    rein(&env, &env.repo)
+        .args(["new", "solo"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "solo"])
+        .assert()
+        .success(); // single mode, no worktree
     let marker = env.bin_dir.join("run_marker2.txt");
     let mut c = rein(&env, &env.repo);
-    c.env("REIN_RUN_CMD", format!("printf '%s' \"$REIN_DIR\" > {}", marker.display()));
+    c.env(
+        "REIN_RUN_CMD",
+        format!("printf '%s' \"$REIN_DIR\" > {}", marker.display()),
+    );
     c.args(["run", "solo"])
         .assert()
         .success()
         .stdout(predicate::str::contains("edits are not isolated"));
     let content = wait_for(&marker);
-    assert!(!content.contains("worktrees/"), "should run in the repo root, got: {}", content);
+    assert!(
+        !content.contains("worktrees/"),
+        "should run in the repo root, got: {}",
+        content
+    );
 }
 
 #[test]
 fn run_installs_skill_at_user_level_without_touching_repo() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "job"]).assert().success();
-    rein(&env, &env.repo).args(["start", "job", "--worktree"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "job"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "job", "--worktree"])
+        .assert()
+        .success();
     let user_skill = env.home.join(".claude/skills/run-rein-task/SKILL.md");
     let wt_skill = store_root(&env).join("worktrees/job/.claude/skills/run-rein-task/SKILL.md");
-    assert!(!user_skill.exists(), "precondition: no user-level skill yet");
+    assert!(
+        !user_skill.exists(),
+        "precondition: no user-level skill yet"
+    );
     rein(&env, &env.repo)
         .env("REIN_RUN_CMD", "true")
         .args(["run", "job"])
@@ -1541,16 +1843,28 @@ fn run_installs_skill_at_user_level_without_touching_repo() {
         .success()
         .stdout(predicate::str::contains("installed run-rein-task skill"));
     // installed globally for any worktree, but the repo/worktree stays clean
-    assert!(user_skill.exists(), "skill should be installed at the user level");
-    assert!(!wt_skill.exists(), "run must not add skill files to the repo worktree");
+    assert!(
+        user_skill.exists(),
+        "skill should be installed at the user level"
+    );
+    assert!(
+        !wt_skill.exists(),
+        "run must not add skill files to the repo worktree"
+    );
 }
 
 #[test]
 fn run_captures_bg_session_id_for_logs() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "job"]).assert().success();
-    rein(&env, &env.repo).args(["start", "job", "--worktree"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "job"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "job", "--worktree"])
+        .assert()
+        .success();
     // fake agent prints what `claude --bg` prints; rein parses the session id out
     rein(&env, &env.repo)
         .env("REIN_RUN_CMD", "printf 'backgrounded abcd1234 rein:job\\n'")
@@ -1560,7 +1874,11 @@ fn run_captures_bg_session_id_for_logs() {
         .stdout(predicate::str::contains("backgrounded").and(predicate::str::contains("abcd1234")));
     let id = task_id(&env, "active", "job");
     let state = read(&store_root(&env).join("state").join(format!("{}.json", id)));
-    assert!(state.contains("abcd1234"), "session id not recorded: {}", state);
+    assert!(
+        state.contains("abcd1234"),
+        "session id not recorded: {}",
+        state
+    );
     // `rein logs` surfaces the id + Claude Code's own viewers
     rein(&env, &env.repo)
         .args(["logs", "job"])
@@ -1573,8 +1891,14 @@ fn run_captures_bg_session_id_for_logs() {
 fn run_can_background_codex_command() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "job"]).assert().success();
-    rein(&env, &env.repo).args(["start", "job", "--worktree"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "job"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "job", "--worktree"])
+        .assert()
+        .success();
     let marker = env.bin_dir.join("codex_marker.txt");
     rein(&env, &env.repo)
         .env("REIN_RUN_AGENT", "codex")
@@ -1593,12 +1917,28 @@ fn run_can_background_codex_command() {
     let content = wait_for(&marker);
     let id = task_id(&env, "active", "job");
     assert!(content.contains(&id), "REIN_TASK not set: {}", content);
-    assert!(content.contains("worktrees/job"), "REIN_DIR not the worktree: {}", content);
-    assert!(content.contains("rein todo"), "REIN_PROMPT missing task instructions: {}", content);
+    assert!(
+        content.contains("worktrees/job"),
+        "REIN_DIR not the worktree: {}",
+        content
+    );
+    assert!(
+        content.contains("rein todo"),
+        "REIN_PROMPT missing task instructions: {}",
+        content
+    );
 
     let state = read(&store_root(&env).join("state").join(format!("{}.json", id)));
-    assert!(state.contains(r#""run_agent": "codex""#), "run agent not recorded: {}", state);
-    assert!(state.contains(r#""run_log""#), "codex log not recorded: {}", state);
+    assert!(
+        state.contains(r#""run_agent": "codex""#),
+        "run agent not recorded: {}",
+        state
+    );
+    assert!(
+        state.contains(r#""run_log""#),
+        "codex log not recorded: {}",
+        state
+    );
 
     rein(&env, &env.repo)
         .args(["logs", "job"])
@@ -1607,8 +1947,64 @@ fn run_can_background_codex_command() {
         .stdout(
             predicate::str::contains("codex pid")
                 .and(predicate::str::contains("tail -f"))
-                .and(predicate::str::contains("codex exec resume codex-thread-1")),
+                .and(predicate::str::contains(
+                    "codex resume --include-non-interactive codex-thread-1",
+                ))
+                .and(predicate::str::contains(
+                    "codex exec resume codex-thread-1 \"<prompt>\"",
+                )),
         );
+}
+
+#[test]
+fn logs_reports_stopped_codex_run_when_status_file_is_missing() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo)
+        .args(["new", "job"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "job"])
+        .assert()
+        .success();
+    let id = task_id(&env, "active", "job");
+    let root = store_root(&env);
+    let log = root.join("runs/missing_status.log");
+    fs::create_dir_all(log.parent().unwrap()).unwrap();
+    fs::write(
+        &log,
+        r#"{"type":"thread.started","thread_id":"stopped-codex-thread"}"#,
+    )
+    .unwrap();
+    let missing_status = root.join("runs/missing_status.status");
+    fs::write(
+        root.join("state").join(format!("{}.json", id)),
+        serde_json::json!({
+            "version": 1,
+            "path": "active/job.md",
+            "branch": "main",
+            "run_session": "999999999",
+            "run_agent": "codex",
+            "run_log": log,
+            "run_status": missing_status,
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    rein(&env, &env.repo)
+        .args(["logs", "job"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("state stopped")
+                .and(predicate::str::contains("warning status file missing"))
+                .and(predicate::str::contains(
+                    "codex resume --include-non-interactive stopped-codex-thread",
+                )),
+        )
+        .stderr(predicate::str::contains("kill:").not());
 }
 
 #[cfg(unix)]
@@ -1616,13 +2012,23 @@ fn run_can_background_codex_command() {
 fn run_infers_codex_backend_from_run_cmd() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "job"]).assert().success();
-    rein(&env, &env.repo).args(["start", "job", "--worktree"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "job"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "job", "--worktree"])
+        .assert()
+        .success();
     let marker = env.bin_dir.join("fake_codex_marker.txt");
     let fake = env.bin_dir.join("codex");
     fs::write(&fake, "#!/bin/sh\nprintf '%s' \"$REIN_TASK\" > \"$1\"\n").unwrap();
     make_executable(&fake);
-    let path = format!("{}:{}", env.bin_dir.display(), std::env::var("PATH").unwrap_or_default());
+    let path = format!(
+        "{}:{}",
+        env.bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
 
     rein(&env, &env.repo)
         .env("PATH", path)
@@ -1635,20 +2041,253 @@ fn run_infers_codex_backend_from_run_cmd() {
     let id = task_id(&env, "active", "job");
     assert_eq!(wait_for(&marker), id);
     let state = read(&store_root(&env).join("state").join(format!("{}.json", id)));
-    assert!(state.contains(r#""run_agent": "codex""#), "run agent not inferred: {}", state);
+    assert!(
+        state.contains(r#""run_agent": "codex""#),
+        "run agent not inferred: {}",
+        state
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_default_codex_command_separates_prompt_from_options() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo)
+        .args(["new", "job"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "job", "--worktree"])
+        .assert()
+        .success();
+    let marker = env.bin_dir.join("default_codex_args.txt");
+    let fake = env.bin_dir.join("codex");
+    fs::write(
+        &fake,
+        "#!/bin/sh\ntmp=\"$CODEX_ARG_LOG.tmp\"\n{\n  printf 'REIN_ROOT=<%s>\\n' \"$REIN_ROOT\"\n  for arg in \"$@\"; do printf '<%s>\\n' \"$arg\"; done\n} > \"$tmp\"\nmv \"$tmp\" \"$CODEX_ARG_LOG\"\nprintf '{\"type\":\"thread.started\",\"thread_id\":\"default-codex-thread\"}\\n'\n",
+    )
+    .unwrap();
+    make_executable(&fake);
+    let path = format!(
+        "{}:{}",
+        env.bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    rein(&env, &env.repo)
+        .env("PATH", path)
+        .env("REIN_RUN_AGENT", "codex")
+        .env("CODEX_ARG_LOG", &marker)
+        .args(["run", "job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("backgrounded codex pid"));
+
+    let args = wait_for(&marker);
+    let root = store_root(&env);
+    assert!(
+        args.contains(&format!("REIN_ROOT=<{}>\n", root.display())),
+        "REIN_ROOT must be exported to Codex runs: {}",
+        args
+    );
+    assert!(
+        args.contains(&format!(
+            "<exec>\n<--json>\n<--sandbox>\n<danger-full-access>\n<--add-dir>\n<{}>\n<-->\n",
+            root.display()
+        )),
+        "default codex command must grant the rein store and pass `--` before the prompt: {}",
+        args
+    );
+    assert!(
+        args.contains("<Use the run-rein-task skill"),
+        "default codex prompt must be the executable run prompt: {}",
+        args
+    );
+}
+
+#[test]
+fn run_codex_status_file_survives_shell_exit() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo)
+        .args(["new", "job"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "job"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .env("REIN_RUN_AGENT", "codex")
+        .env("REIN_RUN_CMD", "exit 7")
+        .args(["run", "job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("backgrounded codex pid"));
+
+    let id = task_id(&env, "active", "job");
+    let state: serde_json::Value = serde_json::from_str(&read(
+        &store_root(&env).join("state").join(format!("{}.json", id)),
+    ))
+    .unwrap();
+    let status = state["run_status"].as_str().unwrap();
+    assert_eq!(wait_for(Path::new(status)).trim(), "7");
+}
+
+#[test]
+fn run_codex_marks_successful_exit_incomplete_when_todo_remains() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo)
+        .args(["new", "job"])
+        .assert()
+        .success();
+    seed_items(&env, "job");
+    rein(&env, &env.repo)
+        .args(["start", "job"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .env("REIN_RUN_AGENT", "codex")
+        .env("REIN_RUN_CMD", "true")
+        .args(["run", "job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("backgrounded codex pid"));
+
+    let id = task_id(&env, "active", "job");
+    let state: serde_json::Value = serde_json::from_str(&read(
+        &store_root(&env).join("state").join(format!("{}.json", id)),
+    ))
+    .unwrap();
+    let status = state["run_status"].as_str().unwrap();
+    assert_eq!(wait_for(Path::new(status)).trim(), "incomplete");
+
+    rein(&env, &env.repo)
+        .args(["logs", "job"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("state incomplete")
+                .and(predicate::str::contains("unchecked task items remain")),
+        );
+    let log = state["run_log"].as_str().unwrap();
+    assert!(read(Path::new(log)).contains("rein post-run: unchecked items remain"));
+}
+
+#[test]
+fn run_codex_marks_unfinished_json_turn_interrupted() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo)
+        .args(["new", "job"])
+        .assert()
+        .success();
+    seed_items(&env, "job");
+    rein(&env, &env.repo)
+        .args(["start", "job"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .env("REIN_RUN_AGENT", "codex")
+        .env(
+            "REIN_RUN_CMD",
+            "printf '%s\n' \
+             '{\"type\":\"thread.started\",\"thread_id\":\"codex-thread-1\"}' \
+             '{\"type\":\"turn.started\"}' \
+             '{\"type\":\"item.started\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\",\"status\":\"in_progress\"}}'",
+        )
+        .args(["run", "job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("backgrounded codex pid"));
+
+    let id = task_id(&env, "active", "job");
+    let state: serde_json::Value = serde_json::from_str(&read(
+        &store_root(&env).join("state").join(format!("{}.json", id)),
+    ))
+    .unwrap();
+    let status = state["run_status"].as_str().unwrap();
+    assert_eq!(wait_for(Path::new(status)).trim(), "interrupted");
+
+    rein(&env, &env.repo)
+        .args(["logs", "job"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("state interrupted")
+                .and(predicate::str::contains("codex turn interrupted")),
+        );
+    let log = state["run_log"].as_str().unwrap();
+    assert!(
+        read(Path::new(log)).contains("rein post-run: codex turn interrupted before completion")
+    );
+}
+
+#[test]
+fn run_codex_marks_command_result_without_followup_interrupted() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo)
+        .args(["new", "job"])
+        .assert()
+        .success();
+    seed_items(&env, "job");
+    rein(&env, &env.repo)
+        .args(["start", "job"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .env("REIN_RUN_AGENT", "codex")
+        .env(
+            "REIN_RUN_CMD",
+            "printf '%s\n' \
+             '{\"type\":\"thread.started\",\"thread_id\":\"codex-thread-1\"}' \
+             '{\"type\":\"turn.started\"}' \
+             '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"Starting.\"}}' \
+             '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\",\"command\":\"rein todo\",\"aggregated_output\":\"## Tasks\\n1\\tDo work\\n\",\"exit_code\":0,\"status\":\"completed\"}}'",
+        )
+        .args(["run", "job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("backgrounded codex pid"));
+
+    let id = task_id(&env, "active", "job");
+    let state: serde_json::Value = serde_json::from_str(&read(
+        &store_root(&env).join("state").join(format!("{}.json", id)),
+    ))
+    .unwrap();
+    let status = state["run_status"].as_str().unwrap();
+    assert_eq!(wait_for(Path::new(status)).trim(), "interrupted");
+
+    rein(&env, &env.repo)
+        .args(["logs", "job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("state interrupted"));
 }
 
 #[test]
 fn run_sets_session_title_with_branch_and_open_task_numbers() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "job"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "job"])
+        .assert()
+        .success();
     seed_items(&env, "job"); // Tasks: 1,2 · Validation: 3 — all open
-    rein(&env, &env.repo).args(["start", "job", "--worktree"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["start", "job", "--worktree"])
+        .assert()
+        .success();
     let marker = env.bin_dir.join("title_marker.txt");
     // the run command sees REIN_TITLE = rein:<branch>:<open numbers>, range-folded
     rein(&env, &env.repo)
-        .env("REIN_RUN_CMD", format!("printf '%s' \"$REIN_TITLE\" > {}", marker.display()))
+        .env(
+            "REIN_RUN_CMD",
+            format!("printf '%s' \"$REIN_TITLE\" > {}", marker.display()),
+        )
         .args(["run", "job"])
         .assert()
         .success();
@@ -1656,10 +2295,16 @@ fn run_sets_session_title_with_branch_and_open_task_numbers() {
 
     // checking an item drops it from the title — only open items count, and a
     // run of two no longer folds into a range
-    rein(&env, &env.repo).args(["check", "1", "--task", "job"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["check", "1", "--task", "job"])
+        .assert()
+        .success();
     fs::remove_file(&marker).ok();
     rein(&env, &env.repo)
-        .env("REIN_RUN_CMD", format!("printf '%s' \"$REIN_TITLE\" > {}", marker.display()))
+        .env(
+            "REIN_RUN_CMD",
+            format!("printf '%s' \"$REIN_TITLE\" > {}", marker.display()),
+        )
         .args(["run", "job"])
         .assert()
         .success();
@@ -1670,8 +2315,14 @@ fn run_sets_session_title_with_branch_and_open_task_numbers() {
 fn logs_without_a_run_errors() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "job"]).assert().success();
-    rein(&env, &env.repo).args(["start", "job"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "job"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "job"])
+        .assert()
+        .success();
     rein(&env, &env.repo)
         .args(["logs", "job"])
         .assert()
@@ -1684,14 +2335,26 @@ fn done_closes_issue_and_leaves_issue_linked_pr_unmanaged() {
     let env = setup();
     init(&env);
     let gh = fake_gh(&env);
-    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "demo"])
+        .assert()
+        .success();
     seed_items(&env, "demo");
     let mut c = rein(&env, &env.repo);
     gh.apply(&mut c);
     c.args(["issue", "demo"]).assert().success();
-    rein(&env, &env.repo).args(["use", "demo"]).assert().success();
-    rein(&env, &env.repo).args(["attach-pr", "7"]).assert().success();
-    rein(&env, &env.repo).args(["start", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["use", "demo"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["attach-pr", "7"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "demo"])
+        .assert()
+        .success();
 
     gh.set_pr_view_body("");
     let mut c = rein(&env, &env.repo);
@@ -1701,10 +2364,17 @@ fn done_closes_issue_and_leaves_issue_linked_pr_unmanaged() {
     let log = gh.log_text();
     assert!(log.contains("issue close 41"), "log: {}", log);
     assert!(!log.contains("pr edit 7"), "log: {}", log);
-    assert!(!gh.pr_edit_body.exists(), "issue-linked PR body must not be edited");
+    assert!(
+        !gh.pr_edit_body.exists(),
+        "issue-linked PR body must not be edited"
+    );
 
     let month = chrono::Local::now().format("%Y-%m").to_string();
-    assert!(store_root(&env).join("done").join(&month).join("demo.md").exists());
+    assert!(store_root(&env)
+        .join("done")
+        .join(&month)
+        .join("demo.md")
+        .exists());
 }
 
 #[test]
@@ -1712,7 +2382,10 @@ fn cancel_closes_issue_not_planned() {
     let env = setup();
     init(&env);
     let gh = fake_gh(&env);
-    rein(&env, &env.repo).args(["new", "nope"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "nope"])
+        .assert()
+        .success();
     let mut c = rein(&env, &env.repo);
     gh.apply(&mut c);
     c.args(["issue", "nope"]).assert().success();
@@ -1736,7 +2409,10 @@ fn parallel_worktrees_full_workflow() {
     init(&env);
     // two tasks, two worktrees, mutations from each cwd stay isolated
     for title in ["job a", "job b"] {
-        rein(&env, &env.repo).args(["new", title]).assert().success();
+        rein(&env, &env.repo)
+            .args(["new", title])
+            .assert()
+            .success();
     }
     for slug in ["job-a", "job-b"] {
         let path = store_root(&env).join("inbox").join(format!("{}.md", slug));
@@ -1765,7 +2441,10 @@ fn parallel_worktrees_full_workflow() {
     let doc_a = read(&store_root(&env).join("active/job-a.md"));
     let doc_b = read(&store_root(&env).join("active/job-b.md"));
     assert!(doc_a.contains("- [x] <!-- task:work -->"));
-    assert!(doc_b.contains("- [ ] <!-- task:work -->"), "b must stay unchecked");
+    assert!(
+        doc_b.contains("- [ ] <!-- task:work -->"),
+        "b must stay unchecked"
+    );
     assert!(doc_b.contains("b progress"));
     assert!(!doc_a.contains("b progress"));
 
@@ -1778,10 +2457,16 @@ fn parallel_worktrees_full_workflow() {
 
     // finish both from the parent, explicitly
     fs::write(wt_a.join("result.txt"), "made by worker a").unwrap();
-    rein(&env, &env.repo).args(["done", "job-a"]).assert().failure(); // dirty
+    rein(&env, &env.repo)
+        .args(["done", "job-a"])
+        .assert()
+        .failure(); // dirty
     git(&env.home, &wt_a, &["add", "-A"]);
     git(&env.home, &wt_a, &["commit", "-m", "a"]);
-    rein(&env, &env.repo).args(["done", "job-a"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["done", "job-a"])
+        .assert()
+        .success();
     rein(&env, &env.repo)
         .args(["cancel", "job-b", "--force"])
         .assert()
@@ -1798,9 +2483,15 @@ fn parallel_worktrees_full_workflow() {
 fn note_appends_a_general_untagged_agent_log_entry() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "demo"])
+        .assert()
+        .success();
     seed_items(&env, "demo");
-    rein(&env, &env.repo).args(["start", "demo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["start", "demo"])
+        .assert()
+        .success();
 
     // note appends a plain entry under the Agent Log, not tied to any item
     rein(&env, &env.repo)
@@ -1810,22 +2501,40 @@ fn note_appends_a_general_untagged_agent_log_entry() {
         .stdout(predicate::str::contains("noted in demo"));
     let doc = read(&store_root(&env).join("active/demo.md"));
     let log_pos = doc.find("## Agent Log").unwrap();
-    let at = doc.find("a cross-cutting observation").expect("note not appended");
+    let at = doc
+        .find("a cross-cutting observation")
+        .expect("note not appended");
     assert!(at > log_pos, "note must land in the Agent Log");
     // the entry carries no `Task<id>:` tag (that is `rein log`'s job)
-    let line = doc.lines().find(|l| l.contains("a cross-cutting observation")).unwrap();
-    assert!(!line.contains("Task"), "note entry must not be item-tagged: {}", line);
+    let line = doc
+        .lines()
+        .find(|l| l.contains("a cross-cutting observation"))
+        .unwrap();
+    assert!(
+        !line.contains("Task"),
+        "note entry must not be item-tagged: {}",
+        line
+    );
 }
 
 #[test]
 fn title_and_goal_set_via_cli() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "feat x"]).assert().success();
-    rein(&env, &env.repo).args(["use", "feat-x"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "feat x"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["use", "feat-x"])
+        .assert()
+        .success();
     // title sets the frontmatter; goal replaces the ## Goal section — rein owns
     // the write (the caller never edits the Markdown)
-    rein(&env, &env.repo).args(["title", "Polish the feature"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["title", "Polish the feature"])
+        .assert()
+        .success();
     rein(&env, &env.repo)
         .args(["goal", "Make X usable end to end"])
         .assert()
@@ -1848,9 +2557,12 @@ fn title_and_goal_set_via_cli() {
 fn summary_generates_title_and_goal_from_items_via_llm() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "feat v3"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "feat v3"])
+        .assert()
+        .success();
     seed_items(&env, "feat-v3"); // Tasks: 1,2 · Validation: 3
-    // a fake LLM: drains the piped prompt, returns the TITLE/GOAL contract
+                                 // a fake LLM: drains the piped prompt, returns the TITLE/GOAL contract
     rein(&env, &env.repo)
         .env(
             "REIN_SUMMARY_CMD",
@@ -1861,7 +2573,11 @@ fn summary_generates_title_and_goal_from_items_via_llm() {
         .success()
         .stdout(predicate::str::contains("summarized feat-v3"));
     let doc = read(&store_root(&env).join("inbox/feat-v3.md"));
-    assert!(doc.contains("title: v3 CLI ergonomics"), "title not set: {}", doc);
+    assert!(
+        doc.contains("title: v3 CLI ergonomics"),
+        "title not set: {}",
+        doc
+    );
     assert!(
         doc.contains("## Goal\n\nRound out the v3 CLI.\nKeep it LLM-safe."),
         "goal not set from LLM output: {}",
@@ -1875,7 +2591,10 @@ fn summary_generates_title_and_goal_from_items_via_llm() {
 fn summary_refuses_when_there_are_no_items() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "empty"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "empty"])
+        .assert()
+        .success();
     rein(&env, &env.repo)
         .env("REIN_SUMMARY_CMD", "printf 'TITLE: x\\nGOAL: y\\n'")
         .args(["summary", "empty"])
@@ -1888,12 +2607,26 @@ fn summary_refuses_when_there_are_no_items() {
 fn start_single_records_the_current_branch_in_frontmatter() {
     let env = setup();
     init(&env);
-    rein(&env, &env.repo).args(["new", "solo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["new", "solo"])
+        .assert()
+        .success();
     // single mode claims no new branch — it records the checked-out branch (main)
-    rein(&env, &env.repo).args(["start", "solo"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["start", "solo"])
+        .assert()
+        .success();
     let doc = read(&store_root(&env).join("active/solo.md"));
-    assert!(doc.contains("branch: main"), "single start should record the current branch: {}", doc);
+    assert!(
+        doc.contains("branch: main"),
+        "single start should record the current branch: {}",
+        doc
+    );
     let id = task_id(&env, "active", "solo");
     let st = read(&store_root(&env).join("state").join(format!("{}.json", id)));
-    assert!(st.contains("\"branch\": \"main\""), "state should record the branch: {}", st);
+    assert!(
+        st.contains("\"branch\": \"main\""),
+        "state should record the branch: {}",
+        st
+    );
 }

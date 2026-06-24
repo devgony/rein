@@ -54,7 +54,10 @@ pub fn load(store: &Store, task_id: &str) -> TaskState {
 pub fn save(store: &Store, task_id: &str, state: &TaskState) -> Result<()> {
     let mut st = state.clone();
     st.version = 1;
-    util::atomic_write(&state_path(store, task_id), &serde_json::to_string_pretty(&st)?)
+    util::atomic_write(
+        &state_path(store, task_id),
+        &serde_json::to_string_pretty(&st)?,
+    )
 }
 
 pub fn remove(store: &Store, task_id: &str) -> Result<()> {

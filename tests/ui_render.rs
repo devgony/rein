@@ -51,7 +51,12 @@ fn rows_multi() -> Vec<TaskRow> {
         slug: slug.to_string(),
         title: format!("{} title", slug),
         status,
-        path: PathBuf::from(format!("/store/{}/{}/{}.md", project, status.as_str(), slug)),
+        path: PathBuf::from(format!(
+            "/store/{}/{}/{}.md",
+            project,
+            status.as_str(),
+            slug
+        )),
         body: format!("## Goal\n\n{}", slug),
         branch: None,
         github_issue: None,
@@ -191,7 +196,10 @@ fn keys_dispatch_to_cli_verbs() {
     let action = key(&mut app, KeyCode::Char('d'));
     assert_eq!(action, UiAction::Done("task-20260613-auth-refactor".into()));
     let action = key(&mut app, KeyCode::Char('i'));
-    assert_eq!(action, UiAction::Issue("task-20260613-auth-refactor".into()));
+    assert_eq!(
+        action,
+        UiAction::Issue("task-20260613-auth-refactor".into())
+    );
     // q quits
     assert_eq!(key(&mut app, KeyCode::Char('q')), UiAction::Quit);
 }
@@ -341,7 +349,11 @@ fn summarizing_overlay_shows_spinner_and_swallows_keys() {
         started: std::time::Instant::now(),
     });
     let screen = draw(&app);
-    assert!(screen.contains("summary"), "overlay title missing: {}", screen);
+    assert!(
+        screen.contains("summary"),
+        "overlay title missing: {}",
+        screen
+    );
     assert!(
         screen.contains("summarizing settings-cleanup"),
         "spinner label missing: {}",
@@ -353,7 +365,10 @@ fn summarizing_overlay_shows_spinner_and_swallows_keys() {
     assert_eq!(key(&mut app, KeyCode::Char('S')), UiAction::None);
     // but Ctrl-c still quits so the user is never trapped on a slow LLM
     assert_eq!(
-        app.on_key(KeyEvent::new(KeyCode::Char('c'), crossterm::event::KeyModifiers::CONTROL)),
+        app.on_key(KeyEvent::new(
+            KeyCode::Char('c'),
+            crossterm::event::KeyModifiers::CONTROL
+        )),
         UiAction::Quit
     );
 }
@@ -368,9 +383,21 @@ fn force_push_offer_prompts_then_f_overwrites() {
     });
     // the overlay explains the conflict and the force-push choice
     let screen = draw(&app);
-    assert!(screen.contains("sync conflict"), "title missing: {}", screen);
-    assert!(screen.contains("settings-cleanup"), "slug missing: {}", screen);
-    assert!(screen.contains("force-push"), "force hint missing: {}", screen);
+    assert!(
+        screen.contains("sync conflict"),
+        "title missing: {}",
+        screen
+    );
+    assert!(
+        screen.contains("settings-cleanup"),
+        "slug missing: {}",
+        screen
+    );
+    assert!(
+        screen.contains("force-push"),
+        "force hint missing: {}",
+        screen
+    );
     // `f` confirms the force-push for the surface that conflicted
     assert_eq!(
         key(&mut app, KeyCode::Char('f')),
@@ -524,7 +551,10 @@ fn run_state_shows_in_meta_and_list() {
     assert_eq!(app.selected_task().unwrap().slug, "auth-refactor");
     let screen = draw(&app);
     assert!(screen.contains("run: "), "meta should show a run line");
-    assert!(screen.contains("running"), "working state renders as 'running'");
+    assert!(
+        screen.contains("running"),
+        "working state renders as 'running'"
+    );
     assert!(screen.contains("●"), "a live run shows a dot in the list");
 }
 
@@ -654,7 +684,10 @@ fn status_message_clears_on_next_key() {
     key(&mut app, KeyCode::Char('j'));
     assert!(app.message.is_empty());
     let screen = draw(&app);
-    assert!(screen.contains("i issue"), "hint returns after the message clears");
+    assert!(
+        screen.contains("i issue"),
+        "hint returns after the message clears"
+    );
 }
 
 #[test]
@@ -715,7 +748,10 @@ fn project_scope_filters_task_list() {
     // scoping to one project hides the others (and the now-redundant tag)
     app.project_scope = Some("acme/web".into());
     assert_eq!(app.visible().len(), 2);
-    assert!(app.visible().iter().all(|&i| app.tasks[i].project == "acme/web"));
+    assert!(app
+        .visible()
+        .iter()
+        .all(|&i| app.tasks[i].project == "acme/web"));
     let screen = draw(&app);
     assert!(screen.contains("tasks [acme/web · all]"));
     assert!(screen.contains("web-a — web-a title"));
@@ -914,7 +950,7 @@ fn item_view_hint_advertises_new() {
 fn e_in_item_view_edits_the_selected_item() {
     let mut app = App::new(rows());
     key(&mut app, KeyCode::Char('l')); // drill into settings-cleanup's items
-    // e opens the editor prefilled with the current item text
+                                       // e opens the editor prefilled with the current item text
     assert_eq!(key(&mut app, KeyCode::Char('e')), UiAction::None);
     assert!(app.editing_item);
     assert_eq!(app.input, "Layout");
@@ -1193,6 +1229,10 @@ fn h_esc_and_q_step_back_out_of_worktree_view() {
     for back in [KeyCode::Char('h'), KeyCode::Esc, KeyCode::Char('q')] {
         let mut app = worktree_view();
         assert_eq!(key(&mut app, back), UiAction::None);
-        assert!(!app.viewing_worktrees, "{:?} should leave the worktree view", back);
+        assert!(
+            !app.viewing_worktrees,
+            "{:?} should leave the worktree view",
+            back
+        );
     }
 }

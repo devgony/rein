@@ -4,7 +4,11 @@ use rein::commands::{exec, local, sync_cmd};
 use rein::Ctx;
 
 #[derive(Parser)]
-#[command(name = "rein", version, about = "LLM task journal + shared inbox manager")]
+#[command(
+    name = "rein",
+    version,
+    about = "LLM task journal + shared inbox manager"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,

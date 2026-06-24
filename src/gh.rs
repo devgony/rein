@@ -39,9 +39,7 @@ impl Gh {
 
     fn run(&self, args: &[&str], stdin: Option<&str>) -> Result<String> {
         let mut cmd = Command::new(&self.bin);
-        cmd.args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
         if let Some(dir) = &self.cwd {
             cmd.current_dir(dir);
         }
@@ -104,7 +102,14 @@ impl Gh {
 
     pub fn issue_create(&self, title: &str, body: &str, project: Option<&str>) -> Result<u64> {
         let mut args = vec![
-            "issue", "create", "--title", title, "--body-file", "-", "--label", "rein",
+            "issue",
+            "create",
+            "--title",
+            title,
+            "--body-file",
+            "-",
+            "--label",
+            "rein",
         ];
         // `--project <title|number>` files the new issue onto a GitHub Project
         // board (Projects v2); omitted when no project was chosen.
@@ -142,7 +147,10 @@ impl Gh {
     }
 
     pub fn issue_view_body(&self, number: u64) -> Result<String> {
-        let out = self.run(&["issue", "view", &number.to_string(), "--json", "body"], None)?;
+        let out = self.run(
+            &["issue", "view", &number.to_string(), "--json", "body"],
+            None,
+        )?;
         let v: serde_json::Value = serde_json::from_str(&out).context("bad gh issue view JSON")?;
         Ok(v["body"].as_str().unwrap_or_default().to_string())
     }

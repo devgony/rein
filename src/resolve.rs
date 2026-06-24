@@ -38,10 +38,12 @@ pub fn resolve_task(ctx: &Ctx, flag: Option<&str>) -> Result<(TaskRef, Source)> 
         }
     }
     if let Some(id) = ctx.store.read_current() {
-        let task = ctx
-            .store
-            .find_by_id(&id)
-            .ok_or_else(|| anyhow!("current points to missing task '{}' (run `rein doctor`)", id))?;
+        let task = ctx.store.find_by_id(&id).ok_or_else(|| {
+            anyhow!(
+                "current points to missing task '{}' (run `rein doctor`)",
+                id
+            )
+        })?;
         return Ok((task, Source::CurrentFile));
     }
     bail!("no task resolved: pass --task <id>, run inside a bound worktree, or `rein use <task>`")
