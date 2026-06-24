@@ -3,7 +3,9 @@ use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use rein::gitx::Worktree;
 use rein::store::Status;
-use rein::ui::{App, ForcePush, ForceSurface, StartMode, Summarizing, TaskRow, UiAction};
+use rein::ui::{
+    App, ForcePush, ForceSurface, RunAgentChoice, StartMode, Summarizing, TaskRow, UiAction,
+};
 use std::path::PathBuf;
 
 fn rows() -> Vec<TaskRow> {
@@ -582,6 +584,31 @@ fn task_list_title_shows_configured_run_agent_for_scoped_project() {
 }
 
 #[test]
+fn agent_picker_sets_scoped_project_run_agent() {
+    let mut row = rows_in("acme/web");
+    for t in &mut row {
+        t.run_agent_config = Some("codex".into());
+    }
+    let mut app = App::new(row);
+    app.project_scope = Some("acme/web".into());
+
+    assert_eq!(key(&mut app, KeyCode::Char('A')), UiAction::None);
+    assert!(app.picking_agent);
+    let screen = draw(&app);
+    assert!(screen.contains("run agent"));
+    assert!(screen.contains("project: acme/web"));
+    assert!(screen.contains("codex"));
+    assert!(screen.contains("claude"));
+
+    assert_eq!(key(&mut app, KeyCode::Down), UiAction::None);
+    assert_eq!(
+        key(&mut app, KeyCode::Enter),
+        UiAction::SetRunAgent("acme/web".into(), RunAgentChoice::Claude)
+    );
+    assert!(!app.picking_agent);
+}
+
+#[test]
 fn meta_pane_shows_frontmatter() {
     let mut row = rows();
     row[0].branch = Some("settings-cleanup".into());
@@ -629,6 +656,7 @@ fn keybinding_hint_advertises_new_and_move() {
     assert!(screen.contains("y copy dir"));
     assert!(screen.contains("x run"));
     assert!(screen.contains("a attach"));
+    assert!(screen.contains("A agent"));
 }
 
 #[test]

@@ -116,6 +116,7 @@ pub enum UiAction {
     CopyDir(PathBuf), // copy the task's working directory path to the clipboard
     Run(String),    // launch an agent on the task in the background
     AttachRun(String), // open the last background run in the native agent UI
+    SetRunAgent(String, RunAgentChoice), // project name + backend choice
     Summary(String), // LLM-summarize the task's items into title + Goal (rein owns the write)
     ToggleItem(String, String), // task id + item id: flip its checkbox (reopens a failed item)
     AddItem(String, String), // task id + text: append a new checklist item to ## Tasks
@@ -135,6 +136,24 @@ pub enum StartMode {
     Worktree,
     Branch,
 }
+
+/// Run backends the dashboard can write to `git config rein.runagent`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunAgentChoice {
+    Codex,
+    Claude,
+}
+
+impl RunAgentChoice {
+    fn as_str(self) -> &'static str {
+        match self {
+            RunAgentChoice::Codex => "codex",
+            RunAgentChoice::Claude => "claude",
+        }
+    }
+}
+
+const RUN_AGENT_CHOICES: [RunAgentChoice; 2] = [RunAgentChoice::Codex, RunAgentChoice::Claude];
 
 const TABS: [Option<Status>; 5] = [
     None,
@@ -215,6 +234,12 @@ pub struct App {
     pub picking_project: bool,
     /// Cursor in the project picker (0 = "all projects", then `project_list()`).
     pub project_sel: usize,
+    /// True while the centered run-agent picker is shown (`A` from the task list).
+    pub picking_agent: bool,
+    /// Cursor in the run-agent picker (`codex` / `claude`).
+    pub agent_sel: usize,
+    /// Project whose repo config will be updated when the picker is confirmed.
+    pub agent_target: Option<String>,
     /// Store + label of the repo `rein ui` was launched from, if any — the
     /// fallback target for `new` when no task is selected.
     pub home_store_root: Option<PathBuf>,
@@ -290,6 +315,9 @@ impl App {
             all_projects: Vec::new(),
             picking_project: false,
             project_sel: 0,
+            picking_agent: false,
+            agent_sel: 0,
+            agent_target: None,
             home_store_root: None,
             home_label: None,
             viewing_items: false,
@@ -809,6 +837,49 @@ impl App {
             }
             return UiAction::None;
         }
+        // centered run-agent picker: write the choice to the target project's
+        // git config on Enter (or 1/2), Esc/q cancels.
+        if self.picking_agent {
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                return UiAction::Quit;
+            }
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    self.picking_agent = false;
+                    self.agent_target = None;
+                }
+                KeyCode::Char('j') | KeyCode::Down | KeyCode::Tab | KeyCode::Char('l') => {
+                    self.agent_sel = (self.agent_sel + 1) % RUN_AGENT_CHOICES.len();
+                }
+                KeyCode::Char('k') | KeyCode::Up | KeyCode::BackTab | KeyCode::Char('h') => {
+                    self.agent_sel =
+                        (self.agent_sel + RUN_AGENT_CHOICES.len() - 1) % RUN_AGENT_CHOICES.len();
+                }
+                KeyCode::Char('1') => {
+                    self.picking_agent = false;
+                    if let Some(project) = self.agent_target.take() {
+                        return UiAction::SetRunAgent(project, RunAgentChoice::Codex);
+                    }
+                }
+                KeyCode::Char('2') => {
+                    self.picking_agent = false;
+                    if let Some(project) = self.agent_target.take() {
+                        return UiAction::SetRunAgent(project, RunAgentChoice::Claude);
+                    }
+                }
+                KeyCode::Enter => {
+                    self.picking_agent = false;
+                    if let Some(project) = self.agent_target.take() {
+                        return UiAction::SetRunAgent(
+                            project,
+                            RUN_AGENT_CHOICES[self.agent_sel.min(RUN_AGENT_CHOICES.len() - 1)],
+                        );
+                    }
+                }
+                _ => {}
+            }
+            return UiAction::None;
+        }
         if self.filtering {
             match key.code {
                 KeyCode::Esc => {
@@ -934,6 +1005,18 @@ impl App {
                 Some(t) => return UiAction::AttachRun(t.id.clone()),
                 None => self.message = "no task selected".into(),
             },
+            KeyCode::Char('A') => match self.agent_target_project() {
+                Some(project) => {
+                    let current = self.project_run_agent(&project).unwrap_or("claude");
+                    self.agent_sel = RUN_AGENT_CHOICES
+                        .iter()
+                        .position(|agent| agent.as_str() == current)
+                        .unwrap_or(0);
+                    self.agent_target = Some(project);
+                    self.picking_agent = true;
+                }
+                None => self.message = "no project selected".into(),
+            },
             // summarize the task's checklist items into a title + Goal via the
             // configured LLM (the same `rein summary` path); needs items to work
             KeyCode::Char('S') => match self.selected_task() {
@@ -994,6 +1077,8 @@ impl App {
             self.render_summarizing(f, s);
         } else if let Some(fp) = &self.force_push {
             self.render_force_push(f, fp);
+        } else if self.picking_agent {
+            self.render_agent_picker(f);
         } else if let Some(msg) = &self.popup {
             self.render_popup(f, msg);
         }
@@ -1076,6 +1161,49 @@ impl App {
         let para = Paragraph::new(msg.to_string())
             .wrap(Wrap { trim: true })
             .block(block);
+        f.render_widget(Clear, area);
+        f.render_widget(para, area);
+    }
+
+    /// A centered backend picker for `rein run`: Enter writes the choice to the
+    /// scoped/selected project's git config, then the dashboard reloads rows.
+    fn render_agent_picker(&self, f: &mut Frame) {
+        let project = self.agent_target.as_deref().unwrap_or("?");
+        let sel = self.agent_sel.min(RUN_AGENT_CHOICES.len() - 1);
+        let mut lines = vec![
+            Line::from(vec![
+                Span::styled("project: ", Style::default().fg(Color::DarkGray)),
+                Span::raw(project.to_string()),
+            ]),
+            Line::from(""),
+        ];
+        for (idx, agent) in RUN_AGENT_CHOICES.iter().enumerate() {
+            let marker = if idx == sel { "▶ " } else { "  " };
+            let style = if idx == sel {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            lines.push(Line::from(vec![
+                Span::raw(marker),
+                Span::styled(
+                    format!("{}. ", idx + 1),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(agent.as_str(), style.fg(Color::Cyan)),
+            ]));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::styled(
+            "Enter select · j/k move · 1/2 choose · Esc cancel",
+            Style::default().fg(Color::DarkGray),
+        ));
+        let area = centered_rect(42, 28, f.area());
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(" run agent ");
+        let para = Paragraph::new(lines).wrap(Wrap { trim: true }).block(block);
         f.render_widget(Clear, area);
         f.render_widget(para, area);
     }
@@ -1413,12 +1541,28 @@ impl App {
 
     fn scope_run_agent(&self) -> Option<&str> {
         let project = self.project_scope.as_deref()?;
+        self.project_run_agent(project)
+    }
+
+    fn project_run_agent(&self, project: &str) -> Option<&str> {
         self.tasks
             .iter()
             .find(|t| t.project == project)
             .and_then(|t| t.run_agent_config.as_deref())
             .map(run_agent_name)
             .filter(|agent| !agent.is_empty())
+    }
+
+    fn agent_target_project(&self) -> Option<String> {
+        self.project_scope
+            .clone()
+            .or_else(|| {
+                self.selected_task()
+                    .map(|t| t.project.clone())
+                    .filter(|p| !p.is_empty())
+            })
+            .or_else(|| self.home_label.clone())
+            .filter(|p| !p.is_empty())
     }
 
     fn render_preview(&self, f: &mut Frame, area: Rect) {
@@ -1513,12 +1657,18 @@ impl App {
             "j/k pick project · Enter file issue · Esc cancel".to_string()
         } else if self.picking_project {
             "j/k move · Enter select project · Esc cancel".to_string()
+        } else if self.picking_agent {
+            let project = self.agent_target.as_deref().unwrap_or("?");
+            format!(
+                "run agent [{}] · Enter select · j/k move · Esc cancel",
+                project
+            )
         } else if self.filtering {
             format!("/{}", self.filter)
         } else if !self.message.is_empty() {
             self.message.clone()
         } else {
-            "j/k · Tab · P project · Enter edit · l items · n new · s start · m move · d done · D delete · x run · a attach · S summary · i issue · p PR · y copy dir · w worktrees · / · q quit"
+            "j/k Tab P project Enter l items n new s start m move d done D delete x run a attach A agent S summary i issue p PR y copy dir w worktrees / q quit"
                 .to_string()
         };
         // a readable light gray so the hints stand out (the old dark gray was
@@ -2263,6 +2413,23 @@ fn event_loop(
                     None => Err(anyhow!("task '{}' vanished", id)),
                 };
                 finish(app, projects, r);
+            }
+            UiAction::SetRunAgent(project, agent) => {
+                let r = match projects.iter().find(|p| p.project == project) {
+                    Some(info) => ctx_for(info)
+                        .and_then(|ctx| ctx.repo.config_set("rein.runagent", agent.as_str())),
+                    None => Err(anyhow!("project '{}' vanished", project)),
+                };
+                match r {
+                    Ok(()) => {
+                        app.message = format!("{} run agent: {}", project, agent.as_str());
+                    }
+                    Err(e) => {
+                        app.popup = Some(format!("{:#}", e));
+                        app.popup_error = true;
+                    }
+                }
+                app.tasks = load_all_rows(projects);
             }
             UiAction::Summary(id) => {
                 // the LLM call can take many seconds; run it on a worker thread so

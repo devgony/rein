@@ -141,6 +141,7 @@ A single dashboard across all your projects. Launched inside a repo, it pre-scop
 | `D`     | delete permanently (asks `y` to confirm; removes files + worktree) |
 | `x`     | run an agent on the task in the background (`REIN_RUN_CMD`) |
 | `a`     | attach/resume the task's last run (`claude attach` or `codex resume --include-non-interactive`) |
+| `A`     | choose the project's run agent (`codex` or `claude`) |
 | `S`     | summarize the task's checklist items into title + Goal via the configured LLM (`rein summary`); runs on a worker thread with a spinner overlay so the slow LLM call doesn't freeze the dashboard (`Ctrl-c` still quits) |
 | `i`     | create the issue (pick a GitHub Project, or none), or push to an existing one (on a sync conflict, press `f` to force-push) |
 | `p`     | open a draft PR (then `w` worktree / `b` branch), or push to an existing one (on a sync conflict, press `f` to force-push) |
