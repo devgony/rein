@@ -3,7 +3,7 @@ use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use rein::gitx::Worktree;
 use rein::store::Status;
-use rein::ui::{App, StartMode, TaskRow, UiAction};
+use rein::ui::{App, ForcePush, ForceSurface, StartMode, Summarizing, TaskRow, UiAction};
 use std::path::PathBuf;
 
 fn rows() -> Vec<TaskRow> {
@@ -304,6 +304,80 @@ fn x_runs_only_active_tasks() {
         key(&mut app, KeyCode::Char('x')),
         UiAction::Run("task-20260613-auth-refactor".into())
     );
+}
+
+#[test]
+fn shift_s_summarizes_task_with_items() {
+    let mut app = App::new(rows());
+    // settings-cleanup (index 0) has checklist items → S emits Summary
+    assert_eq!(
+        key(&mut app, KeyCode::Char('S')),
+        UiAction::Summary("task-20260613-settings-cleanup".into())
+    );
+    // auth-refactor has only a Goal (no items) → friendly message, no action
+    key(&mut app, KeyCode::Char('j'));
+    assert_eq!(key(&mut app, KeyCode::Char('S')), UiAction::None);
+    assert!(app.message.contains("no checklist items"));
+}
+
+#[test]
+fn summarizing_overlay_shows_spinner_and_swallows_keys() {
+    let mut app = App::new(rows());
+    // simulate an in-flight summary (the worker thread would own the sender)
+    let (_tx, rx) = std::sync::mpsc::channel();
+    app.summarizing = Some(Summarizing {
+        slug: "settings-cleanup".into(),
+        rx,
+        started: std::time::Instant::now(),
+    });
+    let screen = draw(&app);
+    assert!(screen.contains("summary"), "overlay title missing: {}", screen);
+    assert!(
+        screen.contains("summarizing settings-cleanup"),
+        "spinner label missing: {}",
+        screen
+    );
+    assert!(screen.contains('⠋'), "spinner frame missing: {}", screen);
+    // keys are swallowed while a summary runs so nothing conflicts mid-flight
+    assert_eq!(key(&mut app, KeyCode::Char('q')), UiAction::None);
+    assert_eq!(key(&mut app, KeyCode::Char('S')), UiAction::None);
+    // but Ctrl-c still quits so the user is never trapped on a slow LLM
+    assert_eq!(
+        app.on_key(KeyEvent::new(KeyCode::Char('c'), crossterm::event::KeyModifiers::CONTROL)),
+        UiAction::Quit
+    );
+}
+
+#[test]
+fn force_push_offer_prompts_then_f_overwrites() {
+    let mut app = App::new(rows());
+    app.force_push = Some(ForcePush {
+        task_id: "task-20260613-settings-cleanup".into(),
+        surface: ForceSurface::Issue,
+        slug: "settings-cleanup".into(),
+    });
+    // the overlay explains the conflict and the force-push choice
+    let screen = draw(&app);
+    assert!(screen.contains("sync conflict"), "title missing: {}", screen);
+    assert!(screen.contains("settings-cleanup"), "slug missing: {}", screen);
+    assert!(screen.contains("force-push"), "force hint missing: {}", screen);
+    // `f` confirms the force-push for the surface that conflicted
+    assert_eq!(
+        key(&mut app, KeyCode::Char('f')),
+        UiAction::ForcePush("task-20260613-settings-cleanup".into(), ForceSurface::Issue)
+    );
+    assert!(app.force_push.is_none(), "offer should clear after f");
+
+    // any other key cancels the offer (no overwrite) and says so
+    let mut app = App::new(rows());
+    app.force_push = Some(ForcePush {
+        task_id: "task-20260613-auth-refactor".into(),
+        surface: ForceSurface::Pr,
+        slug: "auth-refactor".into(),
+    });
+    assert_eq!(key(&mut app, KeyCode::Char('x')), UiAction::None);
+    assert!(app.force_push.is_none(), "offer should clear after cancel");
+    assert!(app.message.contains("canceled"));
 }
 
 #[test]
@@ -923,6 +997,22 @@ fn item_view_shows_only_the_selected_items_log() {
     assert!(screen.contains("log · item 2"));
     assert!(screen.contains("wired the second thing"));
     assert!(!screen.contains("wired the first thing"));
+}
+
+#[test]
+fn item_view_shows_a_failed_items_blocker_log() {
+    // a resolved-failed item still has a Task<id>-tagged blocker entry, so the
+    // reason shows under the item in the drill-in view (regression: `rein fail`
+    // used to write `FAIL <id>:` which the per-item filter never matched)
+    let body = "## Tasks\n\n- [x] <!-- task:1 --> <!-- failed --> ~~Do the thing~~ \u{274c}\n\n## Agent Log\n\n<!-- append-only -->\n- 2026-06-23 Task1: FAIL blocked by upstream";
+    let mut app = one_row(body);
+    key(&mut app, KeyCode::Char('l'));
+    let screen = draw(&app);
+    assert!(screen.contains("log · item 1"));
+    assert!(
+        screen.contains("blocked by upstream"),
+        "a failed item's blocker entry must show in the item log"
+    );
 }
 
 #[test]

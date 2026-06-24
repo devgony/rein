@@ -22,7 +22,8 @@ Rules:
 1. Execute only the unchecked items `rein todo` prints.
 2. Never edit checkboxes or Agent Log in the Markdown directly. Use:
    - `rein check <item-id>` after a task is implemented and verified
-   - `rein log "<text>"` to append a concise entry after each completed task
+   - `rein log "<text>" --item <item-id>` to record progress on a specific item — `--item` is required and the entry is tagged so it shows under that item in `rein ui`
+   - `rein note "<text>"` to append an Agent Log entry not tied to any specific item
    - `rein fail <item-id> --reason "<text>"` when blocked — resolves the item (it drops out of `rein todo`, so a re-run won't re-attempt it); `rein retry <item-id>` reopens it
 3. Preserve `<!-- task:... -->` ID comments when editing other sections.
 4. Run relevant tests before checking validation items.

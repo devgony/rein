@@ -180,15 +180,24 @@ pub fn push_task(ctx: &Ctx, task: &TaskRef, resolved: bool) -> Result<()> {
         push_surface(ctx, &task, &gh, Surface::Issue(number), resolved)?;
     }
     if let Some(number) = task.doc.front.github_pr {
-        push_surface(ctx, &task, &gh, Surface::Pr(number), resolved)?;
+        if let Some(issue) = task.doc.front.github_issue {
+            println!(
+                "PR #{}: unmanaged (issue #{} holds the managed task body)",
+                number, issue
+            );
+        } else {
+            push_surface(ctx, &task, &gh, Surface::Pr(number), resolved)?;
+        }
     }
     Ok(())
 }
 
 /// Push the managed section to the task's issue only (TUI `i` on a task that
 /// already has an issue). Mirrors `push_task` but targets a single surface so
-/// `i` and `r` publish to their own surfaces independently.
-pub fn push_issue(ctx: &Ctx, task: &TaskRef) -> Result<()> {
+/// `i` and `r` publish to their own surfaces independently. `force` overwrites
+/// the remote even on a conflict (the single-surface equivalent of
+/// `rein push --resolved`), for the TUI's force-push offer.
+pub fn push_issue(ctx: &Ctx, task: &TaskRef, force: bool) -> Result<()> {
     let _lock = SyncLock::acquire(&ctx.store)?;
     let task = ensure_ids_saved(ctx, task)?;
     let number = task
@@ -197,12 +206,12 @@ pub fn push_issue(ctx: &Ctx, task: &TaskRef) -> Result<()> {
         .github_issue
         .with_context(|| format!("'{}' has no attached issue", task.slug))?;
     let gh = Gh::in_dir(&ctx.repo.workdir);
-    push_surface(ctx, &task, &gh, Surface::Issue(number), false)
+    push_surface(ctx, &task, &gh, Surface::Issue(number), force)
 }
 
 /// Push the managed section to the task's PR only (TUI `r` on a task that
-/// already has a PR).
-pub fn push_pr(ctx: &Ctx, task: &TaskRef) -> Result<()> {
+/// already has a PR). `force` overwrites the remote even on a conflict.
+pub fn push_pr(ctx: &Ctx, task: &TaskRef, force: bool) -> Result<()> {
     let _lock = SyncLock::acquire(&ctx.store)?;
     let task = ensure_ids_saved(ctx, task)?;
     let number = task
@@ -210,8 +219,16 @@ pub fn push_pr(ctx: &Ctx, task: &TaskRef) -> Result<()> {
         .front
         .github_pr
         .with_context(|| format!("'{}' has no attached PR", task.slug))?;
+    if let Some(issue) = task.doc.front.github_issue {
+        bail!(
+            "PR #{} is unmanaged because '{}' is linked to issue #{}; run `rein push` to sync the issue instead",
+            number,
+            task.slug,
+            issue
+        );
+    }
     let gh = Gh::in_dir(&ctx.repo.workdir);
-    push_surface(ctx, &task, &gh, Surface::Pr(number), false)
+    push_surface(ctx, &task, &gh, Surface::Pr(number), force)
 }
 
 enum Surface {
@@ -312,6 +329,13 @@ pub fn attach_pr(ctx: &Ctx, number: u64) -> Result<()> {
     doc.front.github_pr = Some(number);
     doc.touch();
     ctx.store.write_doc(&task.path, &doc)?;
-    println!("attached PR #{} to {} — run `rein push` to publish the managed section", number, task.slug);
+    if let Some(issue) = doc.front.github_issue {
+        println!(
+            "attached PR #{} to {} — issue #{} remains the managed sync target",
+            number, task.slug, issue
+        );
+    } else {
+        println!("attached PR #{} to {} — run `rein push` to publish the managed section", number, task.slug);
+    }
     Ok(())
 }

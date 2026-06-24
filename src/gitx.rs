@@ -178,6 +178,15 @@ impl Repo {
         git_in(&self.workdir, &["switch", "-c", branch]).map(|_| ())
     }
 
+    /// The currently checked-out branch of this worktree. `None` when HEAD is
+    /// detached or the repo is bare (`git branch --show-current` prints nothing),
+    /// so single-mode `start` records a branch only when there genuinely is one.
+    pub fn current_branch(&self) -> Option<String> {
+        git_in(&self.workdir, &["branch", "--show-current"])
+            .ok()
+            .filter(|s| !s.is_empty())
+    }
+
     /// Whether a local branch already exists — used to turn the predictable
     /// `git worktree add -b`/`switch -c` collision into an actionable message.
     pub fn branch_exists(&self, branch: &str) -> bool {

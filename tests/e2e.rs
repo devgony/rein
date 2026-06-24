@@ -143,7 +143,7 @@ case "$1_$2" in
   issue_close|issue_comment|label_create)
     ;;
   pr_create)
-    cat - >/dev/null
+    if [ -n "$GH_PR_CREATE_BODY" ]; then cat - > "$GH_PR_CREATE_BODY"; else cat - >/dev/null; fi
     echo "https://github.com/o/r/pull/${GH_PR_NUMBER:-7}"
     ;;
   pr_view)
@@ -168,6 +168,7 @@ struct FakeGh {
     issue_list: PathBuf,
     pr_view: PathBuf,
     pr_edit_body: PathBuf,
+    pr_create_body: PathBuf,
 }
 
 fn fake_gh(env: &Env) -> FakeGh {
@@ -184,6 +185,7 @@ fn fake_gh(env: &Env) -> FakeGh {
         issue_list: env.bin_dir.join("issue_list.json"),
         pr_view: env.bin_dir.join("pr_view.json"),
         pr_edit_body: env.bin_dir.join("pr_edit_body.txt"),
+        pr_create_body: env.bin_dir.join("pr_create_body.txt"),
     }
 }
 
@@ -196,7 +198,8 @@ impl FakeGh {
             .env("GH_EDIT_BODY", &self.edit_body)
             .env("GH_ISSUE_LIST", &self.issue_list)
             .env("GH_PR_VIEW", &self.pr_view)
-            .env("GH_PR_EDIT_BODY", &self.pr_edit_body);
+            .env("GH_PR_EDIT_BODY", &self.pr_edit_body)
+            .env("GH_PR_CREATE_BODY", &self.pr_create_body);
     }
     fn set_issue_view_body(&self, body: &str) {
         fs::write(
@@ -413,21 +416,38 @@ fn mutations_check_uncheck_log_fail() {
     rein(&env, &env.repo).args(["uncheck", "1"]).assert().success();
     assert!(read(&path).contains("- [ ] <!-- task:1 --> Do thing one"));
 
+    // log is item-scoped: --item ties the entry to a checklist item and the
+    // entry is written with the `Task<id>` reference the UI's per-item log matches
     rein(&env, &env.repo)
-        .args(["log", "implemented the thing"])
+        .args(["log", "implemented the thing", "--item", "1"])
         .assert()
         .success();
     let doc = read(&path);
-    assert!(doc.contains("implemented the thing"));
+    assert!(doc.contains("Task1: implemented the thing"));
     let log_pos = doc.find("## Agent Log").unwrap();
     assert!(doc.find("implemented the thing").unwrap() > log_pos);
+
+    // log without --item is refused (use `rein note` for an un-itemized entry)
+    rein(&env, &env.repo)
+        .args(["log", "no item given"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--item"));
+
+    // a bad item id fails loudly with the available ids
+    rein(&env, &env.repo)
+        .args(["log", "bad", "--item", "99"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("available items"));
 
     rein(&env, &env.repo)
         .args(["fail", "1", "--reason", "blocked by upstream"])
         .assert()
         .success();
     let doc = read(&path);
-    assert!(doc.contains("FAIL 1: blocked by upstream"));
+    // the blocker entry is tagged Task<id> so it shows under the item in the UI
+    assert!(doc.contains("Task1: FAIL blocked by upstream"));
     // fail resolves the item: checked box + failed sentinel + ~~strike~~ ❌
     assert!(doc.contains("- [x] <!-- task:1 --> <!-- failed --> ~~Do thing one~~ ❌"));
 
@@ -435,7 +455,7 @@ fn mutations_check_uncheck_log_fail() {
     rein(&env, &env.repo).args(["retry", "1"]).assert().success();
     let doc = read(&path);
     assert!(doc.contains("- [ ] <!-- task:1 --> Do thing one"));
-    assert!(doc.contains("RETRY 1"));
+    assert!(doc.contains("Task1: RETRY"));
 
     // unknown item errors and lists what's available
     rein(&env, &env.repo)
@@ -638,23 +658,42 @@ fn mutation_gate_refuses_ambiguous_current() {
     init(&env);
     for title in ["one", "two"] {
         rein(&env, &env.repo).args(["new", title]).assert().success();
+        let path = store_root(&env).join("inbox").join(format!("{}.md", title));
+        let content = read(&path).replace(
+            "## Tasks\n",
+            "## Tasks\n\n- [ ] <!-- task:1 --> Do thing\n",
+        );
+        fs::write(path, content).unwrap();
     }
     // two active tasks, current points at the last
     rein(&env, &env.repo).args(["start", "one"]).assert().success();
     rein(&env, &env.repo).args(["start", "two"]).assert().success();
 
     rein(&env, &env.repo)
-        .args(["log", "hello"])
+        .args(["note", "hello"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("ambiguous").and(predicate::str::contains("--task")));
 
     // explicit --task passes the gate
     rein(&env, &env.repo)
-        .args(["log", "hello", "--task", "one"])
+        .args(["note", "hello", "--task", "one"])
         .assert()
         .success();
     assert!(read(&store_root(&env).join("active/one.md")).contains("hello"));
+
+    // log uses --item for the checklist id and --task for document selection
+    rein(&env, &env.repo)
+        .args(["log", "progress", "--item", "1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ambiguous").and(predicate::str::contains("--task")));
+    rein(&env, &env.repo)
+        .args(["log", "progress", "--item", "1", "--task", "two"])
+        .assert()
+        .success();
+    assert!(read(&store_root(&env).join("active/two.md")).contains("Task1: progress"));
+    assert!(!read(&store_root(&env).join("active/one.md")).contains("Task1: progress"));
 
     // query commands are not gated
     rein(&env, &env.repo).arg("current").assert().success();
@@ -680,10 +719,10 @@ fn resolution_order_flag_env_current() {
         .success()
         .stdout(predicate::str::contains(&id_one));
 
-    // --task flag (#1) beats env (#3): log lands in 'two'
+    // --task flag (#1) beats env (#3): note lands in 'two'
     rein(&env, &env.repo)
         .env("REIN_TASK", &id_one)
-        .args(["log", "flag wins", "--task", "two"])
+        .args(["note", "flag wins", "--task", "two"])
         .assert()
         .success();
     assert!(read(&store_root(&env).join("inbox/two.md")).contains("flag wins"));
@@ -1105,7 +1144,7 @@ fn pull_applies_remote_change_and_keeps_log() {
     c.args(["issue", "demo"]).assert().success();
     rein(&env, &env.repo).args(["use", "demo"]).assert().success();
     rein(&env, &env.repo)
-        .args(["log", "local progress note"])
+        .args(["note", "local progress note"])
         .assert()
         .success();
 
@@ -1251,7 +1290,7 @@ fn attach_pr_push_renders_managed_section_with_folded_log() {
     seed_items(&env, "demo");
     rein(&env, &env.repo).args(["use", "demo"]).assert().success();
     rein(&env, &env.repo)
-        .args(["log", "agent did a thing"])
+        .args(["note", "agent did a thing"])
         .assert()
         .success();
     rein(&env, &env.repo).args(["attach-pr", "7"]).assert().success();
@@ -1358,6 +1397,47 @@ fn pr_pushes_branch_and_opens_draft_when_commits_exist() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("already has PR #7"));
+}
+
+#[test]
+fn pr_body_is_resolves_when_task_is_issue_linked() {
+    let env = setup();
+    init(&env);
+    add_origin(&env);
+    let gh = fake_gh(&env);
+    rein(&env, &env.repo).args(["new", "gamma"]).assert().success();
+    // link an issue to the task, then start it in a worktree with a commit
+    rein(&env, &env.repo).args(["use", "gamma"]).assert().success();
+    rein(&env, &env.repo).args(["attach-issue", "41"]).assert().success();
+    let mut c = rein(&env, &env.repo);
+    gh.apply(&mut c);
+    c.args(["start", "gamma", "--worktree"]).assert().success();
+    commit_in(&env, &store_root(&env).join("worktrees/gamma"), "feature.txt", "work");
+
+    // the issue already holds the managed task description, so the PR body is just
+    // GitHub's closing keyword — no duplicated task block
+    let mut c = rein(&env, &env.repo);
+    gh.apply(&mut c);
+    c.args(["pr", "gamma"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("draft PR: #7"));
+    let body = read(&gh.pr_create_body);
+    assert_eq!(body.trim(), "resolves #41", "issue-linked PR body");
+    assert!(!body.contains("rein:begin"), "PR body must not duplicate the managed block");
+
+    // Subsequent pushes keep the PR unmanaged; only the issue surface receives the block.
+    gh.set_issue_view_body("issue notes stay.\n");
+    let mut c = rein(&env, &env.repo);
+    gh.apply(&mut c);
+    c.arg("push")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("issue #41: pushed").and(predicate::str::contains("PR #7: unmanaged")));
+    let log = gh.log_text();
+    assert!(log.contains("issue edit 41"), "log: {}", log);
+    assert!(!log.contains("pr edit 7"), "log: {}", log);
+    assert!(!gh.pr_edit_body.exists(), "issue-linked PR body must not be edited");
 }
 
 #[test]
@@ -1479,6 +1559,34 @@ fn run_captures_bg_session_id_for_logs() {
 }
 
 #[test]
+fn run_sets_session_title_with_branch_and_open_task_numbers() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "job"]).assert().success();
+    seed_items(&env, "job"); // Tasks: 1,2 · Validation: 3 — all open
+    rein(&env, &env.repo).args(["start", "job", "--worktree"]).assert().success();
+    let marker = env.bin_dir.join("title_marker.txt");
+    // the run command sees REIN_TITLE = rein:<branch>:<open numbers>, range-folded
+    rein(&env, &env.repo)
+        .env("REIN_RUN_CMD", format!("printf '%s' \"$REIN_TITLE\" > {}", marker.display()))
+        .args(["run", "job"])
+        .assert()
+        .success();
+    assert_eq!(wait_for(&marker), "rein:job:1~3");
+
+    // checking an item drops it from the title — only open items count, and a
+    // run of two no longer folds into a range
+    rein(&env, &env.repo).args(["check", "1", "--task", "job"]).assert().success();
+    fs::remove_file(&marker).ok();
+    rein(&env, &env.repo)
+        .env("REIN_RUN_CMD", format!("printf '%s' \"$REIN_TITLE\" > {}", marker.display()))
+        .args(["run", "job"])
+        .assert()
+        .success();
+    assert_eq!(wait_for(&marker), "rein:job:2,3");
+}
+
+#[test]
 fn logs_without_a_run_errors() {
     let env = setup();
     init(&env);
@@ -1492,7 +1600,7 @@ fn logs_without_a_run_errors() {
 }
 
 #[test]
-fn done_closes_issue_and_updates_pr() {
+fn done_closes_issue_and_leaves_issue_linked_pr_unmanaged() {
     let env = setup();
     init(&env);
     let gh = fake_gh(&env);
@@ -1512,8 +1620,8 @@ fn done_closes_issue_and_updates_pr() {
 
     let log = gh.log_text();
     assert!(log.contains("issue close 41"), "log: {}", log);
-    assert!(log.contains("pr edit 7"), "log: {}", log);
-    assert!(read(&gh.pr_edit_body).contains("rein:begin"));
+    assert!(!log.contains("pr edit 7"), "log: {}", log);
+    assert!(!gh.pr_edit_body.exists(), "issue-linked PR body must not be edited");
 
     let month = chrono::Local::now().format("%Y-%m").to_string();
     assert!(store_root(&env).join("done").join(&month).join("demo.md").exists());
@@ -1567,8 +1675,10 @@ fn parallel_worktrees_full_workflow() {
 
     // each worker mutates "its" task by cwd alone — same item id, no cross-talk
     rein(&env, &wt_a).args(["check", "work"]).assert().success();
+    // item-scoped log from a worktree: the bound task resolves by cwd, --item is
+    // the item id, and the entry is tagged Task<id>
     rein(&env, &wt_b)
-        .args(["log", "b progress"])
+        .args(["log", "b progress", "--item", "work"])
         .assert()
         .success();
 
@@ -1582,7 +1692,7 @@ fn parallel_worktrees_full_workflow() {
     // mutation without binding in the main repo is gated (2 active, no current…
     // actually current was never set in worktree mode → resolution fails cleanly)
     rein(&env, &env.repo)
-        .args(["log", "lost"])
+        .args(["note", "lost"])
         .assert()
         .failure();
 
@@ -1598,4 +1708,112 @@ fn parallel_worktrees_full_workflow() {
         .success();
     assert!(!wt_a.exists());
     assert!(!wt_b.exists());
+}
+
+// ---------------------------------------------------------------------------
+// feat-v3: note, summary, single-mode branch
+// ---------------------------------------------------------------------------
+
+#[test]
+fn note_appends_a_general_untagged_agent_log_entry() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "demo"]).assert().success();
+    seed_items(&env, "demo");
+    rein(&env, &env.repo).args(["start", "demo"]).assert().success();
+
+    // note appends a plain entry under the Agent Log, not tied to any item
+    rein(&env, &env.repo)
+        .args(["note", "a cross-cutting observation"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("noted in demo"));
+    let doc = read(&store_root(&env).join("active/demo.md"));
+    let log_pos = doc.find("## Agent Log").unwrap();
+    let at = doc.find("a cross-cutting observation").expect("note not appended");
+    assert!(at > log_pos, "note must land in the Agent Log");
+    // the entry carries no `Task<id>:` tag (that is `rein log`'s job)
+    let line = doc.lines().find(|l| l.contains("a cross-cutting observation")).unwrap();
+    assert!(!line.contains("Task"), "note entry must not be item-tagged: {}", line);
+}
+
+#[test]
+fn title_and_goal_set_via_cli() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "feat x"]).assert().success();
+    rein(&env, &env.repo).args(["use", "feat-x"]).assert().success();
+    // title sets the frontmatter; goal replaces the ## Goal section — rein owns
+    // the write (the caller never edits the Markdown)
+    rein(&env, &env.repo).args(["title", "Polish the feature"]).assert().success();
+    rein(&env, &env.repo)
+        .args(["goal", "Make X usable end to end"])
+        .assert()
+        .success();
+    let doc = read(&store_root(&env).join("inbox/feat-x.md"));
+    assert!(doc.contains("title: Polish the feature"));
+    assert!(doc.contains("## Goal\n\nMake X usable end to end"));
+    // the rest of the scaffolding survives the Goal rewrite
+    assert!(doc.contains("## Tasks"));
+    assert!(doc.contains("## Agent Log"));
+    // empty text is rejected
+    rein(&env, &env.repo)
+        .args(["goal", "   "])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("empty"));
+}
+
+#[test]
+fn summary_generates_title_and_goal_from_items_via_llm() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "feat v3"]).assert().success();
+    seed_items(&env, "feat-v3"); // Tasks: 1,2 · Validation: 3
+    // a fake LLM: drains the piped prompt, returns the TITLE/GOAL contract
+    rein(&env, &env.repo)
+        .env(
+            "REIN_SUMMARY_CMD",
+            "cat >/dev/null; printf 'TITLE: v3 CLI ergonomics\\nGOAL: Round out the v3 CLI.\\nKeep it LLM-safe.\\n'",
+        )
+        .args(["summary", "feat-v3"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("summarized feat-v3"));
+    let doc = read(&store_root(&env).join("inbox/feat-v3.md"));
+    assert!(doc.contains("title: v3 CLI ergonomics"), "title not set: {}", doc);
+    assert!(
+        doc.contains("## Goal\n\nRound out the v3 CLI.\nKeep it LLM-safe."),
+        "goal not set from LLM output: {}",
+        doc
+    );
+    // the items it summarized are left untouched
+    assert!(doc.contains("Do thing one"));
+}
+
+#[test]
+fn summary_refuses_when_there_are_no_items() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "empty"]).assert().success();
+    rein(&env, &env.repo)
+        .env("REIN_SUMMARY_CMD", "printf 'TITLE: x\\nGOAL: y\\n'")
+        .args(["summary", "empty"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no checklist items"));
+}
+
+#[test]
+fn start_single_records_the_current_branch_in_frontmatter() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "solo"]).assert().success();
+    // single mode claims no new branch — it records the checked-out branch (main)
+    rein(&env, &env.repo).args(["start", "solo"]).assert().success();
+    let doc = read(&store_root(&env).join("active/solo.md"));
+    assert!(doc.contains("branch: main"), "single start should record the current branch: {}", doc);
+    let id = task_id(&env, "active", "solo");
+    let st = read(&store_root(&env).join("state").join(format!("{}.json", id)));
+    assert!(st.contains("\"branch\": \"main\""), "state should record the branch: {}", st);
 }

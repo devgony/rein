@@ -104,9 +104,11 @@ pub enum UiAction {
     IssueWithProject(String, Option<String>), // create the issue, optionally onto a project board
     PushIssue(String),                   // push the managed section to an existing issue
     PushPr(String),                      // push the managed section to an existing PR
+    ForcePush(String, ForceSurface),     // overwrite the remote after a sync conflict (push --resolved)
     CreatePr(String, bool), // open a draft PR; bool = worktree (vs main-repo branch)
     CopyDir(PathBuf),       // copy the task's working directory path to the clipboard
     Run(String),            // launch an agent on the task in the background
+    Summary(String),        // LLM-summarize the task's items into title + Goal (rein owns the write)
     ToggleItem(String, String), // task id + item id: flip its checkbox (reopens a failed item)
     AddItem(String, String),    // task id + text: append a new checklist item to ## Tasks
     EditItem(String, String, String), // task id + item id + new text: reword a checklist item
@@ -133,6 +135,38 @@ const TABS: [Option<Status>; 5] = [
     Some(Status::Done),
     Some(Status::Canceled),
 ];
+
+/// Which surface a force-push targets — the dashboard knows this from the key
+/// that hit the conflict (`i` → issue, `p` → PR), so the offer can retry the
+/// right one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ForceSurface {
+    Issue,
+    Pr,
+}
+
+/// A pending force-push offer, armed when a push (`i`/`p`) hits a sync conflict.
+/// While present the dashboard shows a prompt: `f` overwrites the remote with
+/// the local copy (the `rein push --resolved` path), any other key cancels.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForcePush {
+    pub task_id: String,
+    pub surface: ForceSurface,
+    pub slug: String,
+}
+
+/// An in-flight `rein summary` launched from the dashboard (`S`). The LLM call
+/// runs on a worker thread so the UI keeps animating a spinner instead of
+/// freezing; the event loop polls `rx` each tick and swaps in a result popup
+/// when it lands.
+pub struct Summarizing {
+    /// Task slug, shown in the spinner overlay.
+    pub slug: String,
+    /// Receives the `rein summary` outcome — the summary line or an error.
+    pub rx: std::sync::mpsc::Receiver<Result<String>>,
+    /// When the run started, for the elapsed-seconds readout.
+    pub started: std::time::Instant,
+}
 
 pub struct App {
     pub tasks: Vec<TaskRow>,
@@ -212,6 +246,15 @@ pub struct App {
     /// True while awaiting the worktree-remove confirmation key (`y` confirms;
     /// any other key cancels) in the worktree view.
     pub deleting_worktree: bool,
+    /// An in-flight `rein summary` (the `S` action), or `None`. While `Some`,
+    /// the dashboard shows an animated overlay and swallows keys until it
+    /// resolves into a result popup.
+    pub summarizing: Option<Summarizing>,
+    /// Animation frame for the summarizing spinner, advanced each idle tick.
+    pub spinner_frame: usize,
+    /// A pending force-push offer after a push hit a sync conflict, or `None`.
+    /// While `Some`, the dashboard shows a prompt (`f` overwrites the remote).
+    pub force_push: Option<ForcePush>,
 }
 
 impl App {
@@ -253,6 +296,9 @@ impl App {
             worktree_project: String::new(),
             creating_worktree: false,
             deleting_worktree: false,
+            summarizing: None,
+            spinner_frame: 0,
+            force_push: None,
         }
     }
 
@@ -336,6 +382,28 @@ impl App {
 
     pub fn on_key(&mut self, key: KeyEvent) -> UiAction {
         if key.kind != KeyEventKind::Press {
+            return UiAction::None;
+        }
+        // a summary is running on a worker thread: swallow keys (so a second `S`
+        // or a conflicting action can't fire mid-run) but still honor Ctrl-c so
+        // the user is never trapped waiting on a slow LLM
+        if self.summarizing.is_some() {
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                return UiAction::Quit;
+            }
+            return UiAction::None;
+        }
+        // a sync conflict armed a force-push offer: `f` overwrites the remote
+        // with the local copy, any other key cancels (Ctrl-c still quits)
+        if self.force_push.is_some() {
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                return UiAction::Quit;
+            }
+            let fp = self.force_push.take().expect("force_push is some");
+            if matches!(key.code, KeyCode::Char('f')) {
+                return UiAction::ForcePush(fp.task_id, fp.surface);
+            }
+            self.message = "force-push canceled — resolve locally and retry".into();
             return UiAction::None;
         }
         // a modal error overlay swallows the next key (any key dismisses it)
@@ -849,6 +917,13 @@ impl App {
                 Some(_) => self.message = "only active tasks can run (start it first)".into(),
                 None => {}
             },
+            // summarize the task's checklist items into a title + Goal via the
+            // configured LLM (the same `rein summary` path); needs items to work
+            KeyCode::Char('S') => match self.selected_task() {
+                Some(t) if !task_items(&t.body).is_empty() => return UiAction::Summary(t.id.clone()),
+                Some(_) => self.message = "no checklist items to summarize".into(),
+                None => self.message = "no task selected".into(),
+            },
             KeyCode::Char('p') => match self.selected_task() {
                 // already has a PR → push the managed section to it
                 Some(t) if t.github_pr.is_some() => return UiAction::PushPr(t.id.clone()),
@@ -893,9 +968,66 @@ impl App {
         self.render_meta(f, right[0]);
         self.render_preview(f, right[1]);
         self.render_statusline(f, outer[1]);
-        if let Some(msg) = &self.popup {
+        // overlays are mutually exclusive: the event loop clears `summarizing`
+        // the moment it sets a popup, and a conflict arms `force_push` instead
+        // of a popup, so at most one of these is ever set
+        if let Some(s) = &self.summarizing {
+            self.render_summarizing(f, s);
+        } else if let Some(fp) = &self.force_push {
+            self.render_force_push(f, fp);
+        } else if let Some(msg) = &self.popup {
             self.render_popup(f, msg);
         }
+    }
+
+    /// A centered prompt offering to force-push after a sync conflict — `f`
+    /// overwrites the remote with the local copy, any other key cancels.
+    fn render_force_push(&self, f: &mut Frame, fp: &ForcePush) {
+        let surface = match fp.surface {
+            ForceSurface::Issue => "issue",
+            ForceSurface::Pr => "PR",
+        };
+        let area = centered_rect(60, 35, f.area());
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow))
+            .title(" sync conflict ");
+        let body = format!(
+            "conflict on the {} for '{}': local and remote both changed since the last sync. Backups are in conflicts/.\n\n\
+             press f to force-push — overwrite the remote with your local copy\n\
+             any other key to cancel (resolve locally, then retry)",
+            surface, fp.slug
+        );
+        let para = Paragraph::new(body)
+            .style(Style::default().fg(Color::Yellow))
+            .wrap(Wrap { trim: true })
+            .block(block);
+        f.render_widget(Clear, area);
+        f.render_widget(para, area);
+    }
+
+    /// A centered "summarizing…" overlay with an animated spinner and an
+    /// elapsed-seconds readout, shown while the `rein summary` worker runs so a
+    /// slow LLM reads as working rather than frozen.
+    fn render_summarizing(&self, f: &mut Frame, s: &Summarizing) {
+        const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let spin = FRAMES[self.spinner_frame % FRAMES.len()];
+        let secs = s.started.elapsed().as_secs();
+        let area = centered_rect(50, 20, f.area());
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(" summary ");
+        let body = format!(
+            "{} summarizing {} … ({}s)\n\nasking the LLM to write title + Goal from the items\nCtrl-c to quit",
+            spin, s.slug, secs
+        );
+        let para = Paragraph::new(body)
+            .style(Style::default().fg(Color::Cyan))
+            .wrap(Wrap { trim: true })
+            .block(block);
+        f.render_widget(Clear, area);
+        f.render_widget(para, area);
     }
 
     /// A compact pane above the preview showing the selected task's frontmatter
@@ -1335,7 +1467,7 @@ impl App {
         } else if !self.message.is_empty() {
             self.message.clone()
         } else {
-            "j/k move · Tab status · P project · Enter edit · l items · n new · s start · m move · d done · D delete · x run · i issue · p PR · y copy dir · w worktrees · / filter · q quit"
+            "j/k move · Tab status · P project · Enter edit · l items · n new · s start · m move · d done · D delete · x run · S summary · i issue · p PR · y copy dir · w worktrees · / filter · q quit"
                 .to_string()
         };
         // a readable light gray so the hints stand out (the old dark gray was
@@ -1736,8 +1868,47 @@ fn event_loop(
 ) -> Result<()> {
     let mut idle_ticks = 0u32;
     loop {
+        // pump an in-flight summary worker: surface its result the moment it
+        // lands, replacing the spinner overlay with the result/error popup
+        if let Some(s) = app.summarizing.as_ref() {
+            match s.rx.try_recv() {
+                Ok(result) => {
+                    app.summarizing = None;
+                    match result {
+                        Ok(msg) => {
+                            app.popup = Some(msg);
+                            app.popup_error = false;
+                        }
+                        Err(e) => {
+                            app.popup = Some(format!("{:#}", e));
+                            app.popup_error = true;
+                        }
+                    }
+                    // reload so the freshly written title/Goal show in list + preview
+                    app.tasks = load_all_rows(projects);
+                    terminal.clear()?;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    // worker vanished without sending (shouldn't happen) — don't hang
+                    app.summarizing = None;
+                    app.popup = Some("summary ended unexpectedly".into());
+                    app.popup_error = true;
+                    terminal.clear()?;
+                }
+            }
+        }
         terminal.draw(|f| app.render(f))?;
-        if !event::poll(std::time::Duration::from_millis(250))? {
+        // poll faster while summarizing so the spinner stays smooth and the
+        // result surfaces promptly; otherwise the calm 250ms idle cadence
+        let timeout = if app.summarizing.is_some() { 80 } else { 250 };
+        if !event::poll(std::time::Duration::from_millis(timeout))? {
+            // animate the summary spinner on its own timer (don't also run the
+            // background-run refresh below — that reload would stutter the spin)
+            if app.summarizing.is_some() {
+                app.spinner_frame = app.spinner_frame.wrapping_add(1);
+                continue;
+            }
             // while a background run is live, re-poll `claude agents` every ~4s so
             // its state (running → done) updates without the user touching anything
             idle_ticks += 1;
@@ -1892,15 +2063,27 @@ fn event_loop(
             UiAction::PushIssue(id) => {
                 let r = match find_task(projects, &id) {
                     Some((info, task)) => ctx_for(info)
-                        .and_then(|ctx| crate::commands::sync_cmd::push_issue(&ctx, &task)),
+                        .and_then(|ctx| crate::commands::sync_cmd::push_issue(&ctx, &task, false)),
                     None => Err(anyhow!("task '{}' vanished", id)),
                 };
-                finish(app, projects, r);
+                finish_push(app, projects, r, &id, ForceSurface::Issue);
             }
             UiAction::PushPr(id) => {
                 let r = match find_task(projects, &id) {
                     Some((info, task)) => ctx_for(info)
-                        .and_then(|ctx| crate::commands::sync_cmd::push_pr(&ctx, &task)),
+                        .and_then(|ctx| crate::commands::sync_cmd::push_pr(&ctx, &task, false)),
+                    None => Err(anyhow!("task '{}' vanished", id)),
+                };
+                finish_push(app, projects, r, &id, ForceSurface::Pr);
+            }
+            UiAction::ForcePush(id, surface) => {
+                // the user confirmed `f` after a conflict: re-push with force, the
+                // single-surface `rein push --resolved` (overwrites the remote)
+                let r = match find_task(projects, &id) {
+                    Some((info, task)) => ctx_for(info).and_then(|ctx| match surface {
+                        ForceSurface::Issue => crate::commands::sync_cmd::push_issue(&ctx, &task, true),
+                        ForceSurface::Pr => crate::commands::sync_cmd::push_pr(&ctx, &task, true),
+                    }),
                     None => Err(anyhow!("task '{}' vanished", id)),
                 };
                 finish(app, projects, r);
@@ -1942,6 +2125,37 @@ fn event_loop(
                     }
                 }
                 app.tasks = load_all_rows(projects);
+            }
+            UiAction::Summary(id) => {
+                // the LLM call can take many seconds; run it on a worker thread so
+                // the dashboard keeps animating a spinner instead of freezing. The
+                // event loop polls the channel each tick and swaps in the result
+                // popup when it lands (stdio is piped, so it won't garble the TUI).
+                match find_task(projects, &id) {
+                    Some((info, task)) => match ctx_for(info) {
+                        Ok(ctx) => {
+                            let slug = task.slug.clone();
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            std::thread::spawn(move || {
+                                let _ = tx.send(crate::commands::exec::summary(&ctx, Some(&slug)));
+                            });
+                            app.spinner_frame = 0;
+                            app.summarizing = Some(Summarizing {
+                                slug: task.slug.clone(),
+                                rx,
+                                started: std::time::Instant::now(),
+                            });
+                        }
+                        Err(e) => {
+                            app.popup = Some(format!("{:#}", e));
+                            app.popup_error = true;
+                        }
+                    },
+                    None => {
+                        app.popup = Some(format!("task '{}' vanished", id));
+                        app.popup_error = true;
+                    }
+                }
             }
             UiAction::ToggleItem(id, item_id) => {
                 // mutate the doc in place; the item list redraws with the new
@@ -2181,6 +2395,30 @@ fn finish(app: &mut App, projects: &[StoreInfo], result: Result<()>) {
         }
     }
     app.tasks = load_all_rows(projects);
+}
+
+/// Like `finish`, but a sync conflict arms the force-push offer (a prompt the
+/// user answers with `f`) instead of a dead-end error popup — the dashboard
+/// counterpart of the CLI's `rein push --resolved`. Success and every other
+/// error behave exactly like `finish`.
+fn finish_push(
+    app: &mut App,
+    projects: &[StoreInfo],
+    result: Result<()>,
+    id: &str,
+    surface: ForceSurface,
+) {
+    if let Err(e) = &result {
+        if let Some(c) = e.downcast_ref::<crate::sync::Conflict>() {
+            app.force_push = Some(ForcePush {
+                task_id: id.to_string(),
+                surface,
+                slug: c.slug.clone(),
+            });
+            return;
+        }
+    }
+    finish(app, projects, result);
 }
 
 /// Fuzzy picker used by `rein open` without an argument.
