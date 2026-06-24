@@ -180,7 +180,14 @@ pub fn push_task(ctx: &Ctx, task: &TaskRef, resolved: bool) -> Result<()> {
         push_surface(ctx, &task, &gh, Surface::Issue(number), resolved)?;
     }
     if let Some(number) = task.doc.front.github_pr {
-        push_surface(ctx, &task, &gh, Surface::Pr(number), resolved)?;
+        if let Some(issue) = task.doc.front.github_issue {
+            println!(
+                "PR #{}: unmanaged (issue #{} holds the managed task body)",
+                number, issue
+            );
+        } else {
+            push_surface(ctx, &task, &gh, Surface::Pr(number), resolved)?;
+        }
     }
     Ok(())
 }
@@ -212,6 +219,14 @@ pub fn push_pr(ctx: &Ctx, task: &TaskRef, force: bool) -> Result<()> {
         .front
         .github_pr
         .with_context(|| format!("'{}' has no attached PR", task.slug))?;
+    if let Some(issue) = task.doc.front.github_issue {
+        bail!(
+            "PR #{} is unmanaged because '{}' is linked to issue #{}; run `rein push` to sync the issue instead",
+            number,
+            task.slug,
+            issue
+        );
+    }
     let gh = Gh::in_dir(&ctx.repo.workdir);
     push_surface(ctx, &task, &gh, Surface::Pr(number), force)
 }
@@ -314,6 +329,13 @@ pub fn attach_pr(ctx: &Ctx, number: u64) -> Result<()> {
     doc.front.github_pr = Some(number);
     doc.touch();
     ctx.store.write_doc(&task.path, &doc)?;
-    println!("attached PR #{} to {} — run `rein push` to publish the managed section", number, task.slug);
+    if let Some(issue) = doc.front.github_issue {
+        println!(
+            "attached PR #{} to {} — issue #{} remains the managed sync target",
+            number, task.slug, issue
+        );
+    } else {
+        println!("attached PR #{} to {} — run `rein push` to publish the managed section", number, task.slug);
+    }
     Ok(())
 }

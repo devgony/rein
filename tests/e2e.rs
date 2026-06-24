@@ -416,10 +416,10 @@ fn mutations_check_uncheck_log_fail() {
     rein(&env, &env.repo).args(["uncheck", "1"]).assert().success();
     assert!(read(&path).contains("- [ ] <!-- task:1 --> Do thing one"));
 
-    // log is item-scoped: --task ties the entry to a checklist item and the
+    // log is item-scoped: --item ties the entry to a checklist item and the
     // entry is written with the `Task<id>` reference the UI's per-item log matches
     rein(&env, &env.repo)
-        .args(["log", "implemented the thing", "--task", "1"])
+        .args(["log", "implemented the thing", "--item", "1"])
         .assert()
         .success();
     let doc = read(&path);
@@ -427,16 +427,16 @@ fn mutations_check_uncheck_log_fail() {
     let log_pos = doc.find("## Agent Log").unwrap();
     assert!(doc.find("implemented the thing").unwrap() > log_pos);
 
-    // log without --task is refused (use `rein note` for an un-itemized entry)
+    // log without --item is refused (use `rein note` for an un-itemized entry)
     rein(&env, &env.repo)
         .args(["log", "no item given"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("--task"));
+        .stderr(predicate::str::contains("--item"));
 
     // a bad item id fails loudly with the available ids
     rein(&env, &env.repo)
-        .args(["log", "bad", "--task", "99"])
+        .args(["log", "bad", "--item", "99"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("available items"));
@@ -658,6 +658,12 @@ fn mutation_gate_refuses_ambiguous_current() {
     init(&env);
     for title in ["one", "two"] {
         rein(&env, &env.repo).args(["new", title]).assert().success();
+        let path = store_root(&env).join("inbox").join(format!("{}.md", title));
+        let content = read(&path).replace(
+            "## Tasks\n",
+            "## Tasks\n\n- [ ] <!-- task:1 --> Do thing\n",
+        );
+        fs::write(path, content).unwrap();
     }
     // two active tasks, current points at the last
     rein(&env, &env.repo).args(["start", "one"]).assert().success();
@@ -675,6 +681,19 @@ fn mutation_gate_refuses_ambiguous_current() {
         .assert()
         .success();
     assert!(read(&store_root(&env).join("active/one.md")).contains("hello"));
+
+    // log uses --item for the checklist id and --task for document selection
+    rein(&env, &env.repo)
+        .args(["log", "progress", "--item", "1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ambiguous").and(predicate::str::contains("--task")));
+    rein(&env, &env.repo)
+        .args(["log", "progress", "--item", "1", "--task", "two"])
+        .assert()
+        .success();
+    assert!(read(&store_root(&env).join("active/two.md")).contains("Task1: progress"));
+    assert!(!read(&store_root(&env).join("active/one.md")).contains("Task1: progress"));
 
     // query commands are not gated
     rein(&env, &env.repo).arg("current").assert().success();
@@ -1406,6 +1425,19 @@ fn pr_body_is_resolves_when_task_is_issue_linked() {
     let body = read(&gh.pr_create_body);
     assert_eq!(body.trim(), "resolves #41", "issue-linked PR body");
     assert!(!body.contains("rein:begin"), "PR body must not duplicate the managed block");
+
+    // Subsequent pushes keep the PR unmanaged; only the issue surface receives the block.
+    gh.set_issue_view_body("issue notes stay.\n");
+    let mut c = rein(&env, &env.repo);
+    gh.apply(&mut c);
+    c.arg("push")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("issue #41: pushed").and(predicate::str::contains("PR #7: unmanaged")));
+    let log = gh.log_text();
+    assert!(log.contains("issue edit 41"), "log: {}", log);
+    assert!(!log.contains("pr edit 7"), "log: {}", log);
+    assert!(!gh.pr_edit_body.exists(), "issue-linked PR body must not be edited");
 }
 
 #[test]
@@ -1568,7 +1600,7 @@ fn logs_without_a_run_errors() {
 }
 
 #[test]
-fn done_closes_issue_and_updates_pr() {
+fn done_closes_issue_and_leaves_issue_linked_pr_unmanaged() {
     let env = setup();
     init(&env);
     let gh = fake_gh(&env);
@@ -1588,8 +1620,8 @@ fn done_closes_issue_and_updates_pr() {
 
     let log = gh.log_text();
     assert!(log.contains("issue close 41"), "log: {}", log);
-    assert!(log.contains("pr edit 7"), "log: {}", log);
-    assert!(read(&gh.pr_edit_body).contains("rein:begin"));
+    assert!(!log.contains("pr edit 7"), "log: {}", log);
+    assert!(!gh.pr_edit_body.exists(), "issue-linked PR body must not be edited");
 
     let month = chrono::Local::now().format("%Y-%m").to_string();
     assert!(store_root(&env).join("done").join(&month).join("demo.md").exists());
@@ -1643,10 +1675,10 @@ fn parallel_worktrees_full_workflow() {
 
     // each worker mutates "its" task by cwd alone — same item id, no cross-talk
     rein(&env, &wt_a).args(["check", "work"]).assert().success();
-    // item-scoped log from a worktree: the bound task resolves by cwd, --task is
+    // item-scoped log from a worktree: the bound task resolves by cwd, --item is
     // the item id, and the entry is tagged Task<id>
     rein(&env, &wt_b)
-        .args(["log", "b progress", "--task", "work"])
+        .args(["log", "b progress", "--item", "work"])
         .assert()
         .success();
 

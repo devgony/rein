@@ -442,14 +442,15 @@ pub fn check(ctx: &Ctx, item_id: &str, flag: Option<&str>, checked: bool) -> Res
     Ok(())
 }
 
-/// `rein log <text> --task <item-id>` — append an Agent-Log entry tied to a
+/// `rein log <text> --item <item-id> [--task <doc>]` — append an Agent-Log entry tied to a
 /// checklist item. The item id is mandatory (so a long task list never loses the
 /// association the way a hand-written `Task<id>:` prefix does) and the entry is
 /// written as `Task<id>: <text>`, the convention `rein ui`'s per-item log filter
-/// matches. The document is resolved implicitly (worktree / REIN_TASK / current);
-/// use `rein note` for an entry not about any specific item.
-pub fn log(ctx: &Ctx, text: &str, item_id: &str) -> Result<()> {
-    let task = resolve_for_mutation(ctx, None)?;
+/// matches. `--task` selects the document like the other mutation verbs; without
+/// it the document is resolved implicitly (worktree / REIN_TASK / current). Use
+/// `rein note` for an entry not about any specific item.
+pub fn log(ctx: &Ctx, text: &str, item_id: &str, flag: Option<&str>) -> Result<()> {
+    let task = resolve_for_mutation(ctx, flag)?;
     // validate the item exists before logging, so a typo'd id fails loudly with
     // the available ids instead of silently tagging a non-existent item
     if !task::scan_items(&task.doc.body)
@@ -796,6 +797,9 @@ pub fn done(ctx: &Ctx, query: Option<&str>, keep_worktree: bool) -> Result<()> {
 }
 
 fn final_pr_update(ctx: &Ctx, task: &TaskRef, pr: u64, gh: &Gh) -> Result<()> {
+    if task.doc.front.github_issue.is_some() {
+        return Ok(());
+    }
     let doc = ctx
         .store
         .find_by_id(&task.id)
