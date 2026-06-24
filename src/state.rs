@@ -25,6 +25,15 @@ pub struct TaskState {
     /// Session id of the most recent `rein run`, used to locate its transcript.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_session: Option<String>,
+    /// Agent backend that created `run_session` (`claude` or `codex`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_agent: Option<String>,
+    /// Log file for backends that rein backgrounds directly (currently Codex).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_log: Option<String>,
+    /// Exit-code file written by rein's background wrapper.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_status: Option<String>,
 }
 
 fn default_version() -> u32 {

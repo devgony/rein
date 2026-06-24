@@ -1,6 +1,8 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
@@ -266,6 +268,8 @@ fn init_skill_scaffold() {
     let skill = read(&env.repo.join(".claude/skills/run-rein-task/SKILL.md"));
     assert!(skill.contains("rein check <item-id>"));
     assert!(skill.contains("rein current --path"));
+    let agent_skill = read(&env.repo.join(".agents/skills/run-rein-task/SKILL.md"));
+    assert!(agent_skill.contains("rein log \"<text>\" --item <item-id>"));
 }
 
 #[test]
@@ -1475,6 +1479,13 @@ fn wait_for(path: &Path) -> String {
     }
 }
 
+#[cfg(unix)]
+fn make_executable(path: &Path) {
+    let mut perms = fs::metadata(path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms).unwrap();
+}
+
 #[test]
 fn run_launches_agent_in_worktree_with_task_env() {
     let env = setup();
@@ -1556,6 +1567,75 @@ fn run_captures_bg_session_id_for_logs() {
         .assert()
         .success()
         .stdout(predicate::str::contains("claude attach abcd1234"));
+}
+
+#[test]
+fn run_can_background_codex_command() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "job"]).assert().success();
+    rein(&env, &env.repo).args(["start", "job", "--worktree"]).assert().success();
+    let marker = env.bin_dir.join("codex_marker.txt");
+    rein(&env, &env.repo)
+        .env("REIN_RUN_AGENT", "codex")
+        .env(
+            "REIN_RUN_CMD",
+            format!(
+                "printf '%s|%s|%s' \"$REIN_TASK\" \"$REIN_DIR\" \"$REIN_PROMPT\" > {}; printf '\\n{{\"type\":\"thread.started\",\"thread_id\":\"codex-thread-1\"}}\\n'",
+                marker.display()
+            ),
+        )
+        .args(["run", "job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("backgrounded codex pid"));
+
+    let content = wait_for(&marker);
+    let id = task_id(&env, "active", "job");
+    assert!(content.contains(&id), "REIN_TASK not set: {}", content);
+    assert!(content.contains("worktrees/job"), "REIN_DIR not the worktree: {}", content);
+    assert!(content.contains("rein todo"), "REIN_PROMPT missing task instructions: {}", content);
+
+    let state = read(&store_root(&env).join("state").join(format!("{}.json", id)));
+    assert!(state.contains(r#""run_agent": "codex""#), "run agent not recorded: {}", state);
+    assert!(state.contains(r#""run_log""#), "codex log not recorded: {}", state);
+
+    rein(&env, &env.repo)
+        .args(["logs", "job"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("codex pid")
+                .and(predicate::str::contains("tail -f"))
+                .and(predicate::str::contains("codex exec resume codex-thread-1")),
+        );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_infers_codex_backend_from_run_cmd() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo).args(["new", "job"]).assert().success();
+    rein(&env, &env.repo).args(["start", "job", "--worktree"]).assert().success();
+    let marker = env.bin_dir.join("fake_codex_marker.txt");
+    let fake = env.bin_dir.join("codex");
+    fs::write(&fake, "#!/bin/sh\nprintf '%s' \"$REIN_TASK\" > \"$1\"\n").unwrap();
+    make_executable(&fake);
+    let path = format!("{}:{}", env.bin_dir.display(), std::env::var("PATH").unwrap_or_default());
+
+    rein(&env, &env.repo)
+        .env("PATH", path)
+        .env("REIN_RUN_CMD", format!("codex {}", marker.display()))
+        .args(["run", "job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("backgrounded codex pid"));
+
+    let id = task_id(&env, "active", "job");
+    assert_eq!(wait_for(&marker), id);
+    let state = read(&store_root(&env).join("state").join(format!("{}.json", id)));
+    assert!(state.contains(r#""run_agent": "codex""#), "run agent not inferred: {}", state);
 }
 
 #[test]

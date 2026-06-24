@@ -37,8 +37,9 @@ pub struct TaskRow {
     pub updated_at: String,
     pub tags: Vec<String>,
     pub shared: bool,
-    /// State of the last `rein run`'s background session (`working`/`done`/…),
-    /// resolved from `claude agents`; `None` if no run or the session is unknown.
+    /// State of the last `rein run`'s background session (`working`/`done`/…).
+    /// Claude runs are resolved from `claude agents`; Codex runs use rein's
+    /// wrapper status file.
     pub run_state: Option<String>,
     /// Isolated worktree path from the task's state, if it was started in
     /// worktree mode — distinguishes a worktree-backed task from a plain branch.
@@ -108,6 +109,7 @@ pub enum UiAction {
     CreatePr(String, bool), // open a draft PR; bool = worktree (vs main-repo branch)
     CopyDir(PathBuf),       // copy the task's working directory path to the clipboard
     Run(String),            // launch an agent on the task in the background
+    AttachRun(String),      // open the last background run in the native agent UI
     Summary(String),        // LLM-summarize the task's items into title + Goal (rein owns the write)
     ToggleItem(String, String), // task id + item id: flip its checkbox (reopens a failed item)
     AddItem(String, String),    // task id + text: append a new checklist item to ## Tasks
@@ -917,6 +919,10 @@ impl App {
                 Some(_) => self.message = "only active tasks can run (start it first)".into(),
                 None => {}
             },
+            KeyCode::Char('a') => match self.selected_task() {
+                Some(t) => return UiAction::AttachRun(t.id.clone()),
+                None => self.message = "no task selected".into(),
+            },
             // summarize the task's checklist items into a title + Goal via the
             // configured LLM (the same `rein summary` path); needs items to work
             KeyCode::Char('S') => match self.selected_task() {
@@ -1467,7 +1473,7 @@ impl App {
         } else if !self.message.is_empty() {
             self.message.clone()
         } else {
-            "j/k move · Tab status · P project · Enter edit · l items · n new · s start · m move · d done · D delete · x run · S summary · i issue · p PR · y copy dir · w worktrees · / filter · q quit"
+            "j/k · Tab · P project · Enter edit · l items · n new · s start · m move · d done · D delete · x run · a attach · S summary · i issue · p PR · y copy dir · w worktrees · / · q quit"
                 .to_string()
         };
         // a readable light gray so the hints stand out (the old dark gray was
@@ -1525,7 +1531,7 @@ fn meta_lines(t: &TaskRow) -> Vec<Line<'static>> {
     ]
 }
 
-/// Human label + color for a background-session state from `claude agents`.
+/// Human label + color for a background-session state.
 fn run_state_label(state: Option<&str>) -> (String, Color) {
     match state {
         Some("working") => ("running".into(), Color::Green),
@@ -1659,24 +1665,28 @@ fn log_mentions_item(line: &str, id: &str) -> bool {
 
 fn load_all_rows(projects: &[StoreInfo]) -> Vec<TaskRow> {
     let mut out = Vec::new();
-    // (row index, run session id) for tasks that have been `rein run`
-    let mut sessions: Vec<(usize, String)> = Vec::new();
+    // (row index, Claude session id) for tasks that have been `rein run`
+    let mut claude_sessions: Vec<(usize, String)> = Vec::new();
     for p in projects {
         for t in p.store.list_tasks() {
             let st = crate::state::load(&p.store, &t.id);
-            if let Some(id) = st.run_session.clone() {
-                sessions.push((out.len(), id));
-            }
             let mut row = TaskRow::from_ref(&t, &p.project, &p.store.root);
+            if let Some(id) = st.run_session.clone() {
+                if st.run_agent.as_deref() == Some("codex") {
+                    row.run_state = crate::commands::exec::codex_status_from_state(&st);
+                } else {
+                    claude_sessions.push((out.len(), id));
+                }
+            }
             row.worktree = st.worktree.clone();
             row.repo_dir = p.repo_dir.clone();
             out.push(row);
         }
     }
     // one `claude agents` query covers every project; skip it when nothing ran
-    if !sessions.is_empty() {
+    if !claude_sessions.is_empty() {
         let states = run_states();
-        for (i, id) in sessions {
+        for (i, id) in claude_sessions {
             out[i].run_state = states.get(&id).cloned();
         }
     }
@@ -1861,6 +1871,31 @@ fn open_editor(
     res
 }
 
+/// Suspend the dashboard while the agent's native interactive UI owns the terminal.
+fn open_agent_session(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    attach: &crate::commands::exec::AttachCommand,
+) -> Result<()> {
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    let res = std::process::Command::new(&attach.program)
+        .args(&attach.args)
+        .current_dir(&attach.dir)
+        .status()
+        .with_context(|| format!("failed to launch {}", attach.program))
+        .and_then(|status| {
+            if status.success() {
+                Ok(())
+            } else {
+                anyhow::bail!("{} exited with {}", attach.program, status)
+            }
+        });
+    enable_raw_mode()?;
+    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    terminal.clear()?;
+    res
+}
+
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
@@ -1909,8 +1944,8 @@ fn event_loop(
                 app.spinner_frame = app.spinner_frame.wrapping_add(1);
                 continue;
             }
-            // while a background run is live, re-poll `claude agents` every ~4s so
-            // its state (running → done) updates without the user touching anything
+            // while a background run is live, re-poll backend state every ~4s so
+            // running → done/failed updates without the user touching anything
             idle_ticks += 1;
             let running = app
                 .tasks
@@ -2112,7 +2147,7 @@ fn event_loop(
                         .and_then(|ctx| crate::commands::exec::run(&ctx, Some(&task.slug))),
                     None => Err(anyhow!("task '{}' vanished", id)),
                 };
-                // show the session id + claude attach/logs hints in a popup, not
+                // show the session id / local log hints in a popup, not
                 // via stdout (raw mode would garble the dashboard)
                 match r {
                     Ok(msg) => {
@@ -2125,6 +2160,16 @@ fn event_loop(
                     }
                 }
                 app.tasks = load_all_rows(projects);
+            }
+            UiAction::AttachRun(id) => {
+                let r = match find_task(projects, &id) {
+                    Some((info, task)) => ctx_for(info).and_then(|ctx| {
+                        let attach = crate::commands::exec::attach_command(&ctx, Some(&task.slug))?;
+                        open_agent_session(terminal, &attach)
+                    }),
+                    None => Err(anyhow!("task '{}' vanished", id)),
+                };
+                finish(app, projects, r);
             }
             UiAction::Summary(id) => {
                 // the LLM call can take many seconds; run it on a worker thread so

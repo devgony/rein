@@ -307,6 +307,16 @@ fn x_runs_only_active_tasks() {
 }
 
 #[test]
+fn a_attaches_selected_tasks_last_run() {
+    let mut app = App::new(rows());
+    key(&mut app, KeyCode::Char('j'));
+    assert_eq!(
+        key(&mut app, KeyCode::Char('a')),
+        UiAction::AttachRun("task-20260613-auth-refactor".into())
+    );
+}
+
+#[test]
 fn shift_s_summarizes_task_with_items() {
     let mut app = App::new(rows());
     // settings-cleanup (index 0) has checklist items → S emits Summary
@@ -565,6 +575,7 @@ fn keybinding_hint_advertises_new_and_move() {
     assert!(screen.contains("p PR"));
     assert!(screen.contains("y copy dir"));
     assert!(screen.contains("x run"));
+    assert!(screen.contains("a attach"));
 }
 
 #[test]

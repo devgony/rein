@@ -10,7 +10,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-const SKILL_MD: &str = r#"---
+pub(crate) const SKILL_MD: &str = r#"---
 description: Run the current LLM task document, implement unchecked tasks, update status via rein commands, and append execution notes.
 disable-model-invocation: true
 ---
@@ -30,6 +30,10 @@ Rules:
 5. If a PR is attached, run `rein push` when finished.
 "#;
 
+pub(crate) fn run_task_prompt() -> &'static str {
+    SKILL_MD
+}
+
 pub fn init(skill: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let repo = Repo::discover(&cwd)?;
@@ -42,6 +46,8 @@ pub fn init(skill: bool) -> Result<()> {
     if skill {
         let skill_path = write_skill(&repo.workdir)?;
         println!("skill: {}", skill_path.display());
+        let agent_skill_path = write_agent_skill(&repo.workdir)?;
+        println!("agent skill: {}", agent_skill_path.display());
     }
     Ok(())
 }
@@ -51,6 +57,14 @@ pub fn init(skill: bool) -> Result<()> {
 /// worktree). Overwrites — call `ensure_skill` to write only when missing.
 pub(crate) fn write_skill(base: &std::path::Path) -> Result<std::path::PathBuf> {
     let path = base.join(".claude/skills/run-rein-task/SKILL.md");
+    util::atomic_write(&path, SKILL_MD)?;
+    Ok(path)
+}
+
+/// Write the bundled `run-rein-task` skill where Codex/agent runners discover
+/// project skills.
+pub(crate) fn write_agent_skill(base: &std::path::Path) -> Result<std::path::PathBuf> {
+    let path = base.join(".agents/skills/run-rein-task/SKILL.md");
     util::atomic_write(&path, SKILL_MD)?;
     Ok(path)
 }

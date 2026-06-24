@@ -87,7 +87,7 @@ enum Cmd {
     },
     /// Launch an agent on a task in its worktree, in the background (REIN_RUN_CMD)
     Run { task: Option<String> },
-    /// Show the transcript path of a task's most recent `rein run`
+    /// Show the session/log handle of a task's most recent `rein run`
     Logs { task: Option<String> },
     /// Check an item (LLM-safe mutation)
     Check {

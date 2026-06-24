@@ -125,7 +125,7 @@ Open a draft PR with `rein pr [task] [--worktree]` (worktree-backed, else a main
 
 ## TUI (`rein ui`)
 
-A single dashboard across all your projects. Launched inside a repo, it pre-scopes to that project; press `P` to pick another. The right column shows a small **meta** pane — id, branch (tagged `(worktree)` or `(branch)`), the working `dir:`, issue/PR numbers, created/updated dates, tags, and the live `run:` state of the last `rein run` (running/done/failed, polled from `claude agents`) — above the Markdown preview of the selected task. A task with a live run also gets a green `●` in the list.
+A single dashboard across all your projects. Launched inside a repo, it pre-scopes to that project; press `P` to pick another. The right column shows a small **meta** pane — id, branch (tagged `(worktree)` or `(branch)`), the working `dir:`, issue/PR numbers, created/updated dates, tags, and the live `run:` state of the last `rein run` (running/done/failed, polled from the configured backend) — above the Markdown preview of the selected task. A task with a live run also gets a green `●` in the list.
 
 | key     | action                                        |
 | ------- | --------------------------------------------- |
@@ -140,6 +140,7 @@ A single dashboard across all your projects. Launched inside a repo, it pre-scop
 | `d`     | done                                          |
 | `D`     | delete permanently (asks `y` to confirm; removes files + worktree) |
 | `x`     | run an agent on the task in the background (`REIN_RUN_CMD`) |
+| `a`     | attach/resume the task's last run (`claude attach` or `codex resume --include-non-interactive`) |
 | `S`     | summarize the task's checklist items into title + Goal via the configured LLM (`rein summary`); runs on a worker thread with a spinner overlay so the slow LLM call doesn't freeze the dashboard (`Ctrl-c` still quits) |
 | `i`     | create the issue (pick a GitHub Project, or none), or push to an existing one (on a sync conflict, press `f` to force-push) |
 | `p`     | open a draft PR (then `w` worktree / `b` branch), or push to an existing one (on a sync conflict, press `f` to force-push) |
@@ -223,7 +224,7 @@ rein move <task> <status>            move to any state (plain relocation, no sid
 rein start <task> [--worktree] [--branch <b>] [--draft-pr]
 rein pr [task] [--worktree]           open a draft PR (worktree under the store, else a main-repo branch)
 rein run [task]                       launch an agent on the task in the background (in its worktree)
-rein logs [task]                      show the background session id of the last run (+ claude attach/logs)
+rein logs [task]                      show the background session/log handle of the last run
 rein check / uncheck <item-id> [--task <id>]
 rein log <text> --item <item-id> [--task <id>]   item-scoped Agent Log entry (tagged Task<id>; --item required)
 rein note <text> [--task <id>]       Agent Log entry not tied to a checklist item
@@ -238,32 +239,50 @@ rein doctor                          rebuild state/, fix frontmatter drift
 rein status | root | ui
 ```
 
-## LLM integration (Claude skill)
+## LLM integration (Claude or Codex)
 
 ```sh
-rein init --skill   # scaffold .claude/skills/run-rein-task/SKILL.md
+rein init --skill   # scaffold .claude/ and .agents/ run-rein-task skills
 ```
 
 The skill gets remaining items via `rein todo` and changes state only through `rein check`/`log`/`note`/`fail` (never editing the Markdown directly). `rein log` is item-scoped (`--item <item-id>` is required, and the entry is tagged `Task<id>` so it shows under that item in the TUI's per-item log); `rein note` records an entry not tied to any item. The full rules live in the scaffolded SKILL.md.
 
 ### Launching the agent (`rein run`)
 
-You don't have to `cd` into a worktree to work a task — rein already knows where each task lives. `rein run [task]` (TUI: `x`) launches an agent **in the background**, with its cwd set to the task's worktree (or the main repo if the task only has a branch) and `REIN_TASK`/`REIN_SLUG`/`REIN_BRANCH`/`REIN_DIR`/`REIN_TITLE` exported, so the agent resolves the task no matter where it was invoked. `rein run` waits for the command and surfaces its output, so the command must self-background and return promptly (the default `claude --bg` does — see below); the agent writes its own transcript to its standard location (Claude Code: `~/.claude/projects/…`, visible in its background-agents view).
+You don't have to `cd` into a worktree to work a task — rein already knows where each task lives. `rein run [task]` (TUI: `x`) launches an agent **in the background**, with its cwd set to the task's worktree (or the main repo if the task only has a branch) and `REIN_TASK`/`REIN_SLUG`/`REIN_BRANCH`/`REIN_DIR`/`REIN_TITLE`/`REIN_PROMPT` exported, so the agent resolves the task no matter where it was invoked. Claude Code backgrounds itself with `claude --bg`; Codex's local `codex exec` is foreground-only, so rein backgrounds it and writes stdout/stderr under `<store>/runs/`.
 
-The command is a template, resolved in order: `REIN_RUN_CMD` env → git config `rein.run` → the built-in default:
+The agent backend is resolved from `REIN_RUN_AGENT` → git config `rein.runAgent` → inferred from a configured `REIN_RUN_CMD` whose first word is `codex` → `claude`. The command template is resolved from `REIN_RUN_CMD` env → git config `rein.run` → the backend default.
+
+Claude default:
 
 ```sh
 claude --bg --dangerously-skip-permissions --name "$REIN_TITLE" /run-rein-task
 ```
 
-`claude --bg` dispatches a **tracked background session** (it runs under Claude Code's daemon, not a detached `-p` process) and returns immediately. A custom `REIN_RUN_CMD` should likewise return promptly (self-background) — `rein run` waits for the command and surfaces its output.
+Codex default:
+
+```sh
+codex exec --json --sandbox workspace-write "$REIN_PROMPT"
+```
+
+`claude --bg` dispatches a **tracked background session** (it runs under Claude Code's daemon, not a detached `-p` process) and returns immediately. Claude-compatible custom commands should likewise return promptly (self-background) because `rein run` waits for that command and surfaces its output. Codex backend commands are the exception: rein spawns them in the background and records their pid/log/status itself.
 
 `--name "$REIN_TITLE"` pins the session's display name (shown in `claude agents`, the picker, and the terminal title) to `rein:<branch>:<open task numbers>` — the open (unchecked, unfailed) checklist item numbers, with consecutive runs of three or more folded into a range, e.g. `rein:feat-v3:1~12,14,16`. rein exports the computed name as `REIN_TITLE`; a custom command can reference `$REIN_TITLE` (or set its own `--name`). rein still tracks the session by its **id** regardless of the name.
 
-**Watching it.** `claude --bg` prints a session id, which `rein run` echoes and records. The TUI shows the session's live state in the `run:` line of the meta pane (and a green `●` in the list while it's running), refreshed automatically every few seconds. For the full conversation use Claude Code's own tools: `claude agents` (list all sessions), `claude attach <id>` (watch live / resume), `claude logs <id>` (recent output); `rein logs [task]` reprints the recorded id with those commands. Task progress also shows as the checklist and Agent Log fill in (the agent reports through `rein check`/`rein log`).
+**Watching it.** `claude --bg` prints a session id, which `rein run` echoes and records. Codex runs record the wrapper pid, log path, and exit-code file. The TUI shows the live state in the `run:` line of the meta pane (and a green `●` in the list while it's running), refreshed automatically every few seconds. For Claude, `rein logs [task]` reprints `claude agents`/`attach`/`logs` hints. For Codex, `rein logs [task]` prints the pid, state, local log, a `tail -f` command, and when the default JSON mode has emitted a `thread.started` event, the exact `codex exec resume <thread-id>` command. In the TUI, press `a` to open the native agent UI for the selected task's last run (`claude attach <id>` or `codex resume --include-non-interactive <thread-id>`). Task progress also shows as the checklist and Agent Log fill in (the agent reports through `rein check`/`rein log`).
 
-Override it for a different agent or flags, e.g. `git config rein.run 'claude --name rein:$REIN_SLUG -p /run-rein-task'` (this example names the session after the slug instead of the default branch + task numbers). Notes:
+Use Codex locally with:
 
-- The default runs fully autonomously (`--dangerously-skip-permissions`). Claude Code may show a one-time prompt to accept bypass mode, which a detached run can't answer — set `"skipDangerousModePermissionPrompt": true` in `~/.claude/settings.json` to suppress it (if you already use skip-permissions normally, this is likely already set).
+```sh
+git config rein.runAgent codex
+# or one-off:
+REIN_RUN_AGENT=codex rein run my-task
+```
+
+This uses local `codex exec`, not `codex cloud exec`. Cloud tasks run in configured Codex cloud environments and count against Codex cloud-task usage; use them explicitly with a custom `REIN_RUN_CMD` only when you want that remote execution model.
+
+Override the command for a different agent or flags, e.g. `git config rein.run 'claude --name rein:$REIN_SLUG -p /run-rein-task'` (this example names the session after the slug instead of the default branch + task numbers). A custom Codex command can use `$REIN_PROMPT`, or just start with `codex` so rein infers the Codex backend. Notes:
+
+- The defaults run non-interactively. Claude uses its background daemon with `--dangerously-skip-permissions`; Codex uses `--json --sandbox workspace-write`, matching Codex's automation guidance to grant edit access without disabling the sandbox entirely while keeping a machine-readable event log. Claude Code may show a one-time prompt to accept bypass mode, which a detached run can't answer — set `"skipDangerousModePermissionPrompt": true` in `~/.claude/settings.json` to suppress it (if you already use skip-permissions normally, this is likely already set).
 - Prefer a worktree (`rein start … --worktree`) so the autonomous run is isolated; running a branch-only task happens in the main repo and is **not** isolated (rein warns).
 - The default prompt is the `/run-rein-task` skill. A new worktree only has a project-level skill if it was **committed** (worktrees check out committed files only). So `rein run` installs rein's bundled copy at the **user level** (`~/.claude/skills/run-rein-task/`) when it's missing — available in every worktree with **no files added to your repo** and nothing to commit or share. (`rein init --skill` is the separate opt-in if you *do* want a project-level skill to commit and customize; a project skill takes precedence over the user-level one.)
