@@ -125,7 +125,7 @@ Open a draft PR with `rein pr [task] [--worktree]` (worktree-backed, else a main
 
 ## TUI (`rein ui`)
 
-A single dashboard across all your projects. Launched inside a repo, it pre-scopes to that project; press `P` to pick another. The task list title shows the scoped project's configured run agent (`REIN_RUN_AGENT` or project `rein.runAgent`) beside the project name. The right column shows a small **meta** pane — id, branch (tagged `(worktree)` or `(branch)`), the working `dir:`, issue/PR numbers, created/updated dates, tags, and the live `run:` state of the last `rein run` (running/done/failed, polled from the configured backend) — above the Markdown preview of the selected task. A task with a live run also gets a green `●` in the list.
+A single dashboard across all your projects. Launched inside a repo, it pre-scopes to that project; press `P` to pick another. The task list title shows the scoped project's configured run agent (`REIN_RUN_AGENT` or project `rein.runAgent`) beside the project name. The right column shows a small **meta** pane — id, branch (tagged `(worktree)` or `(branch)`), the working `dir:`, issue/PR numbers, created/updated dates, tags, and the live `run:` state of the last `rein run` (running/done/failed, polled from the configured backend) — above the Markdown preview of the selected task. A task with a live run colors its task title green in the list.
 
 | key     | action                                        |
 | ------- | --------------------------------------------- |
@@ -141,6 +141,7 @@ A single dashboard across all your projects. Launched inside a repo, it pre-scop
 | `D`     | delete permanently (asks `y` to confirm; removes files + worktree) |
 | `x`     | run an agent on the task in the background (`REIN_RUN_CMD`) |
 | `a`     | attach/resume the task's last run (`claude attach` or `codex resume --include-non-interactive`) |
+| `L`     | show recent log output for the selected running task |
 | `A`     | choose the project's run agent (`codex` or `claude`) |
 | `S`     | summarize the task's checklist items into title + Goal via the configured LLM (`rein summary`); runs on a worker thread with a spinner overlay so the slow LLM call doesn't freeze the dashboard (`Ctrl-c` still quits) |
 | `i`     | create the issue (pick a GitHub Project, or none), or push to an existing one (on a sync conflict, press `f` to force-push) |

@@ -117,6 +117,7 @@ pub enum UiAction {
     Run(String),    // launch an agent on the task in the background
     AttachRun(String), // open the last background run in the native agent UI
     SetRunAgent(String, RunAgentChoice), // project name + backend choice
+    TailLog(String), // show recent output for the task's running agent
     Summary(String), // LLM-summarize the task's items into title + Goal (rein owns the write)
     ToggleItem(String, String), // task id + item id: flip its checkbox (reopens a failed item)
     AddItem(String, String), // task id + text: append a new checklist item to ## Tasks
@@ -1005,6 +1006,14 @@ impl App {
                 Some(t) => return UiAction::AttachRun(t.id.clone()),
                 None => self.message = "no task selected".into(),
             },
+            KeyCode::Char('L') => match self.selected_task() {
+                Some(t) if t.run_state.as_deref() == Some("working") => {
+                    return UiAction::TailLog(t.id.clone())
+                }
+                Some(t) if t.run_state.is_some() => self.message = "task is not running".into(),
+                Some(_) => self.message = "no running log for this task".into(),
+                None => self.message = "no task selected".into(),
+            },
             KeyCode::Char('A') => match self.agent_target_project() {
                 Some(project) => {
                     let current = self.project_run_agent(&project).unwrap_or("claude");
@@ -1497,11 +1506,19 @@ impl App {
                 } else {
                     "  "
                 };
-                let style = if row == self.selected.min(vis.len().saturating_sub(1)) {
+                let mut style = if row == self.selected.min(vis.len().saturating_sub(1)) {
                     Style::default().add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
+                if t.run_state.as_deref() == Some("working") {
+                    let color = if self.spinner_frame % 2 == 0 {
+                        Color::Green
+                    } else {
+                        Color::LightGreen
+                    };
+                    style = style.fg(color);
+                }
                 let mut spans = vec![
                     Span::raw(marker),
                     Span::styled(
@@ -1517,10 +1534,6 @@ impl App {
                     ));
                 }
                 spans.push(Span::styled(format!("{} — {}", t.slug, t.title), style));
-                // a live background run gets a green dot; other states stay quiet
-                if t.run_state.as_deref() == Some("working") {
-                    spans.push(Span::styled(" ●", Style::default().fg(Color::Green)));
-                }
                 ListItem::new(Line::from(spans))
             })
             .collect();
@@ -1668,7 +1681,7 @@ impl App {
         } else if !self.message.is_empty() {
             self.message.clone()
         } else {
-            "j/k Tab P project Enter l items n new s start m move d done D delete x run a attach A agent S summary i issue p PR y copy dir w worktrees / q quit"
+            "j/k Tab P project Enter l items n new s start m move d done D delete x run a attach L log A agent S summary i issue p PR y copy dir w worktrees / q quit"
                 .to_string()
         };
         // a readable light gray so the hints stand out (the old dark gray was
@@ -2188,6 +2201,9 @@ fn event_loop(
                 .tasks
                 .iter()
                 .any(|t| t.run_state.as_deref() == Some("working"));
+            if running {
+                app.spinner_frame = app.spinner_frame.wrapping_add(1);
+            }
             if running && idle_ticks >= 16 {
                 idle_ticks = 0;
                 app.tasks = load_all_rows(projects);
@@ -2414,6 +2430,25 @@ fn event_loop(
                 };
                 finish(app, projects, r);
             }
+            UiAction::TailLog(id) => {
+                let r = match find_task(projects, &id) {
+                    Some((info, task)) => {
+                        ctx_for(info).and_then(|ctx| tail_run_log(&ctx, &task, 80))
+                    }
+                    None => Err(anyhow!("task '{}' vanished", id)),
+                };
+                match r {
+                    Ok(msg) => {
+                        app.popup = Some(msg);
+                        app.popup_error = false;
+                    }
+                    Err(e) => {
+                        app.popup = Some(format!("{:#}", e));
+                        app.popup_error = true;
+                    }
+                }
+                app.tasks = load_all_rows(projects);
+            }
             UiAction::SetRunAgent(project, agent) => {
                 let r = match projects.iter().find(|p| p.project == project) {
                     Some(info) => ctx_for(info)
@@ -2597,6 +2632,72 @@ fn event_loop(
         // exec verbs print progress to stdout; in raw mode that leaves stray text
         // on the alternate screen, so force a full repaint after each action
         terminal.clear()?;
+    }
+}
+
+/// Return recent output for the selected task's most recent run. Codex writes a
+/// local JSON log that rein owns; Claude has a native `logs` command.
+fn tail_run_log(ctx: &Ctx, task: &TaskRef, lines: usize) -> Result<String> {
+    let st = crate::state::load(&ctx.store, &task.id);
+    let session = st
+        .run_session
+        .clone()
+        .with_context(|| format!("no run recorded for '{}'", task.slug))?;
+    match st.run_agent.as_deref().unwrap_or("claude") {
+        "codex" => {
+            let log = st
+                .run_log
+                .as_deref()
+                .with_context(|| format!("no Codex log recorded for '{}'", task.slug))?;
+            let body = tail_file(log, lines)?;
+            Ok(format!("{} · last {} lines\n\n{}", log, lines, body))
+        }
+        _ => {
+            let bin = std::env::var("REIN_CLAUDE").unwrap_or_else(|_| "claude".to_string());
+            let out = std::process::Command::new(&bin)
+                .args(["logs", &session])
+                .output()
+                .with_context(|| format!("failed to launch {}", bin))?;
+            if !out.status.success() {
+                anyhow::bail!(
+                    "{} logs {} failed: {}",
+                    bin,
+                    session,
+                    String::from_utf8_lossy(&out.stderr).trim()
+                );
+            }
+            let mut text = String::from_utf8_lossy(&out.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if !stderr.trim().is_empty() {
+                if !text.ends_with('\n') && !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(stderr.trim_end());
+            }
+            Ok(format!(
+                "claude logs {} · last {} lines\n\n{}",
+                session,
+                lines,
+                tail_text(&text, lines)
+            ))
+        }
+    }
+}
+
+fn tail_file(path: &str, lines: usize) -> Result<String> {
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("failed to read log {}", path))?;
+    Ok(tail_text(&text, lines))
+}
+
+fn tail_text(text: &str, lines: usize) -> String {
+    let all: Vec<&str> = text.lines().collect();
+    let start = all.len().saturating_sub(lines);
+    let tail = all[start..].join("\n");
+    if tail.trim().is_empty() {
+        "(no log output yet)".to_string()
+    } else {
+        tail
     }
 }
 

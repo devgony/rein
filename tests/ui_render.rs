@@ -1,5 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::backend::TestBackend;
+use ratatui::buffer::Buffer;
+use ratatui::style::Color;
 use ratatui::Terminal;
 use rein::gitx::Worktree;
 use rein::store::Status;
@@ -82,11 +84,15 @@ fn rows_multi() -> Vec<TaskRow> {
     ]
 }
 
-fn draw(app: &App) -> String {
+fn render_buffer(app: &App) -> Buffer {
     let backend = TestBackend::new(160, 30);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| app.render(f)).unwrap();
-    let buf = terminal.backend().buffer().clone();
+    terminal.backend().buffer().clone()
+}
+
+fn draw(app: &App) -> String {
+    let buf = render_buffer(app);
     let w = buf.area.width as usize;
     buf.content
         .iter()
@@ -99,6 +105,20 @@ fn draw(app: &App) -> String {
             s
         })
         .collect()
+}
+
+fn first_cell_fg(buf: &Buffer, needle: &str) -> Option<Color> {
+    for y in 0..buf.area.height {
+        for x in 0..buf.area.width {
+            let rest: String = (x..buf.area.width)
+                .map(|xx| buf[(xx, y)].symbol())
+                .collect();
+            if rest.starts_with(needle) {
+                return Some(buf[(x, y)].fg);
+            }
+        }
+    }
+    None
 }
 
 fn key(app: &mut App, code: KeyCode) -> UiAction {
@@ -559,7 +579,23 @@ fn run_state_shows_in_meta_and_list() {
         screen.contains("running"),
         "working state renders as 'running'"
     );
-    assert!(screen.contains("●"), "a live run shows a dot in the list");
+    assert!(
+        !screen.contains("●"),
+        "a live run should not render the old trailing dot"
+    );
+    let buf = render_buffer(&app);
+    assert_eq!(
+        first_cell_fg(&buf, "auth-refactor — Auth refactor"),
+        Some(Color::Green),
+        "a live run colors the task title green"
+    );
+    app.spinner_frame = 1;
+    let buf = render_buffer(&app);
+    assert_eq!(
+        first_cell_fg(&buf, "auth-refactor — Auth refactor"),
+        Some(Color::LightGreen),
+        "the running task title pulses between green shades"
+    );
 }
 
 #[test]
@@ -656,7 +692,24 @@ fn keybinding_hint_advertises_new_and_move() {
     assert!(screen.contains("y copy dir"));
     assert!(screen.contains("x run"));
     assert!(screen.contains("a attach"));
+    assert!(screen.contains("L log"));
     assert!(screen.contains("A agent"));
+}
+
+#[test]
+fn shift_l_shows_tail_log_for_running_task() {
+    let mut with_run = rows();
+    with_run[1].run_state = Some("working".into());
+    let mut app = App::new(with_run);
+    key(&mut app, KeyCode::Char('j')); // auth-refactor
+    assert_eq!(
+        key(&mut app, KeyCode::Char('L')),
+        UiAction::TailLog("task-20260613-auth-refactor".into())
+    );
+
+    let mut app = App::new(rows());
+    assert_eq!(key(&mut app, KeyCode::Char('L')), UiAction::None);
+    assert!(app.message.contains("no running log"));
 }
 
 #[test]
