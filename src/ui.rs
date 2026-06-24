@@ -43,6 +43,9 @@ pub struct TaskRow {
     /// Claude runs are resolved from `claude agents`; Codex runs use rein's
     /// wrapper status file.
     pub run_state: Option<String>,
+    /// Active run-agent configuration for this row's project, shown in the meta
+    /// pane. `REIN_RUN_AGENT` overrides project git config.
+    pub run_agent_config: Option<String>,
     /// Isolated worktree path from the task's state, if it was started in
     /// worktree mode — distinguishes a worktree-backed task from a plain branch.
     pub worktree: Option<String>,
@@ -70,6 +73,7 @@ impl TaskRow {
             tags: t.doc.front.tags.clone(),
             shared: t.doc.front.shared,
             run_state: None,
+            run_agent_config: None,
             worktree: None,
             repo_dir: None,
             project: project.to_string(),
@@ -1530,6 +1534,7 @@ fn meta_lines(t: &TaskRow) -> Vec<Line<'static>> {
     } else {
         t.tags.join(", ")
     };
+    let agent = t.run_agent_config.clone().unwrap_or_else(dash);
     let (run_txt, run_color) = run_state_label(t.run_state.as_deref());
     // branch + how it's backed: an isolated worktree vs a plain main-repo branch
     let branch_txt = match (&t.branch, t.is_worktree()) {
@@ -1552,7 +1557,12 @@ fn meta_lines(t: &TaskRow) -> Vec<Line<'static>> {
             Span::styled("   run: ", dim),
             Span::styled(run_txt, Style::default().fg(run_color)),
         ]),
-        Line::from(vec![Span::styled("dir: ", dim), Span::raw(dir_txt)]),
+        Line::from(vec![
+            Span::styled("agent: ", dim),
+            Span::raw(agent),
+            Span::styled("   dir: ", dim),
+            Span::raw(dir_txt),
+        ]),
         Line::from(vec![
             Span::styled("issue: ", dim),
             Span::raw(issue),
@@ -1716,6 +1726,7 @@ fn load_all_rows(projects: &[StoreInfo]) -> Vec<TaskRow> {
     // (row index, Claude session id) for tasks that have been `rein run`
     let mut claude_sessions: Vec<(usize, String)> = Vec::new();
     for p in projects {
+        let run_agent_config = configured_run_agent_label(p);
         for t in p.store.list_tasks() {
             let st = crate::state::load(&p.store, &t.id);
             let mut row = TaskRow::from_ref(&t, &p.project, &p.store.root);
@@ -1728,6 +1739,7 @@ fn load_all_rows(projects: &[StoreInfo]) -> Vec<TaskRow> {
             }
             row.worktree = st.worktree.clone();
             row.repo_dir = p.repo_dir.clone();
+            row.run_agent_config = run_agent_config.clone();
             out.push(row);
         }
     }
@@ -1739,6 +1751,21 @@ fn load_all_rows(projects: &[StoreInfo]) -> Vec<TaskRow> {
         }
     }
     out
+}
+
+fn configured_run_agent_label(info: &StoreInfo) -> Option<String> {
+    if let Ok(agent) = std::env::var("REIN_RUN_AGENT") {
+        let agent = agent.trim();
+        if !agent.is_empty() {
+            return Some(format!("REIN_RUN_AGENT={agent}"));
+        }
+    }
+    let repo_dir = info.repo_dir.as_ref()?;
+    let repo = Repo::discover(repo_dir).ok()?;
+    repo.config_get("rein.runAgent")
+        .map(|agent| agent.trim().to_string())
+        .filter(|agent| !agent.is_empty())
+        .map(|agent| format!("rein.runAgent={agent}"))
 }
 
 /// Map of background session id → state (`working`/`done`/`failed`/…) from

@@ -29,6 +29,7 @@ fn rows_in(project: &str) -> Vec<TaskRow> {
         project: project.clone(),
         store_root: PathBuf::from("/store"),
         run_state: None,
+        run_agent_config: None,
         worktree: None,
         repo_dir: None,
     };
@@ -68,6 +69,7 @@ fn rows_multi() -> Vec<TaskRow> {
         project: project.to_string(),
         store_root: PathBuf::from(format!("/store/{}", project)),
         run_state: None,
+        run_agent_config: None,
         worktree: None,
         repo_dir: None,
     };
@@ -559,6 +561,19 @@ fn run_state_shows_in_meta_and_list() {
 }
 
 #[test]
+fn meta_pane_shows_configured_run_agent() {
+    let mut row = rows();
+    row[0].run_agent_config = Some("rein.runAgent=codex".into());
+    let app = App::new(row);
+    let screen = draw(&app);
+    assert!(
+        screen.contains("agent: rein.runAgent=codex"),
+        "meta pane should show the configured run agent: {}",
+        screen
+    );
+}
+
+#[test]
 fn meta_pane_shows_frontmatter() {
     let mut row = rows();
     row[0].branch = Some("settings-cleanup".into());
@@ -835,6 +850,7 @@ fn one_row(body: &str) -> App {
         project: String::new(),
         store_root: PathBuf::from("/store"),
         run_state: None,
+        run_agent_config: None,
         worktree: None,
         repo_dir: None,
     };
