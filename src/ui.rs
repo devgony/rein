@@ -1623,21 +1623,25 @@ impl App {
     }
 
     fn render_statusline(&self, f: &mut Frame, area: Rect) {
-        let text = if self.creating_item {
+        let line: Line<'static> = if self.creating_item {
             let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
-            format!(
+            Line::from(format!(
                 "new item [{}]: {} · Enter add · Esc cancel",
                 slug, self.input
-            )
+            ))
         } else if self.editing_item {
             let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
-            format!(
+            Line::from(format!(
                 "edit item [{}]: {} · Enter save · Esc cancel",
                 slug, self.input
-            )
+            ))
         } else if self.deleting_item {
             let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
-            format!("delete item from {}? [y]es · any other key cancels", slug)
+            Line::from(vec![
+                gray_span(format!("delete item from {}? ", slug)),
+                key_span("[y]es"),
+                gray_span(" · any other key cancels"),
+            ])
         } else if self.creating {
             let proj = self
                 .selected_task()
@@ -1645,39 +1649,61 @@ impl App {
                 .filter(|p| !p.is_empty())
                 .or_else(|| self.home_label.clone())
                 .unwrap_or_else(|| "?".into());
-            format!("new task [{}]: {}", proj, self.input)
+            Line::from(format!("new task [{}]: {}", proj, self.input))
         } else if self.moving {
             let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
-            format!(
-                "move {} to: [i]nbox [a]ctive [d]one [c]anceled · Esc cancel",
-                slug
-            )
+            let mut spans = vec![gray_span(format!("move {} to: ", slug))];
+            spans.extend(shortcut_spans(&[
+                ("[i]nbox", ""),
+                ("[a]ctive", ""),
+                ("[d]one", ""),
+                ("[c]anceled", ""),
+            ]));
+            spans.push(gray_span(" · "));
+            spans.push(key_span("Esc"));
+            spans.push(gray_span(" cancel"));
+            Line::from(spans)
         } else if self.deleting {
             let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
-            format!("delete {} permanently? [y]es · any other key cancels", slug)
+            Line::from(vec![
+                gray_span(format!("delete {} permanently? ", slug)),
+                key_span("[y]es"),
+                gray_span(" · any other key cancels"),
+            ])
         } else if self.starting {
             let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
-            format!(
-                "start {}: [s]ingle [w]orktree [b]ranch · any other key cancels",
-                slug
-            )
+            let mut spans = vec![gray_span(format!("start {}: ", slug))];
+            spans.extend(shortcut_spans(&[
+                ("[s]ingle", ""),
+                ("[w]orktree", ""),
+                ("[b]ranch", ""),
+            ]));
+            spans.push(gray_span(" · any other key cancels"));
+            Line::from(spans)
         } else if self.pring {
             let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
-            format!(
-                "PR for {}: [w]orktree [b]ranch · any other key cancels",
-                slug
-            )
+            let mut spans = vec![gray_span(format!("PR for {}: ", slug))];
+            spans.extend(shortcut_spans(&[("[w]orktree", ""), ("[b]ranch", "")]));
+            spans.push(gray_span(" · any other key cancels"));
+            Line::from(spans)
         } else if self.viewing_items {
             let slug = self.selected_task().map(|t| t.slug.as_str()).unwrap_or("");
-            format!(
-                "items {} · j/k move · space toggle · n new · e edit · d delete · h/Esc/q back",
-                slug
-            )
+            Line::from(hint_spans(
+                Some(format!("items {}", slug)),
+                &[
+                    ("j/k", "move"),
+                    ("space", "toggle"),
+                    ("n", "new"),
+                    ("e", "edit"),
+                    ("d", "delete"),
+                    ("h/Esc/q", "back"),
+                ],
+            ))
         } else if self.creating_worktree {
-            format!(
+            Line::from(format!(
                 "new worktree branch: {} · Enter create · Esc cancel",
                 self.input
-            )
+            ))
         } else if self.deleting_worktree {
             let name = self
                 .worktrees
@@ -1685,37 +1711,130 @@ impl App {
                 .and_then(|w| w.path.file_name())
                 .and_then(|n| n.to_str())
                 .unwrap_or("");
-            format!("remove worktree {}? [y]es · any other key cancels", name)
+            Line::from(vec![
+                gray_span(format!("remove worktree {}? ", name)),
+                key_span("[y]es"),
+                gray_span(" · any other key cancels"),
+            ])
         } else if self.viewing_worktrees {
-            format!(
-                "worktrees {} · j/k move · n new · space lock · d remove · y copy · h/Esc/q back",
-                self.worktree_project
-            )
+            Line::from(hint_spans(
+                Some(format!("worktrees {}", self.worktree_project)),
+                &[
+                    ("j/k", "move"),
+                    ("n", "new"),
+                    ("space", "lock"),
+                    ("d", "remove"),
+                    ("y", "copy"),
+                    ("h/Esc/q", "back"),
+                ],
+            ))
         } else if self.issuing {
-            "j/k pick project · Enter file issue · Esc cancel".to_string()
+            Line::from(hint_spans(
+                None,
+                &[
+                    ("j/k", "pick project"),
+                    ("Enter", "file issue"),
+                    ("Esc", "cancel"),
+                ],
+            ))
         } else if self.picking_project {
-            "j/k move · Enter select project · Esc cancel".to_string()
+            Line::from(hint_spans(
+                None,
+                &[
+                    ("j/k", "move"),
+                    ("Enter", "select project"),
+                    ("Esc", "cancel"),
+                ],
+            ))
         } else if self.picking_agent {
             let project = self.agent_target.as_deref().unwrap_or("?");
-            format!(
-                "run agent [{}] · Enter select · j/k move · Esc cancel",
-                project
-            )
+            Line::from(hint_spans(
+                Some(format!("run agent [{}]", project)),
+                &[("Enter", "select"), ("j/k", "move"), ("Esc", "cancel")],
+            ))
         } else if self.filtering {
-            format!("/{}", self.filter)
+            Line::from(format!("/{}", self.filter))
         } else if !self.message.is_empty() {
-            self.message.clone()
+            Line::from(self.message.clone())
         } else {
-            "j/k Tab P project Enter l items n new s start m move d done D delete x run a attach L log A agent S summary i issue p PR y copy dir w worktrees / q quit"
-                .to_string()
+            Line::from(shortcut_spans(&[
+                ("j/k", ""),
+                ("Tab", ""),
+                ("P", "project"),
+                ("Enter", ""),
+                ("l", "items"),
+                ("n", "new"),
+                ("s", "start"),
+                ("m", "move"),
+                ("d", "done"),
+                ("D", "delete"),
+                ("x", "run"),
+                ("a", "attach"),
+                ("L", "log"),
+                ("A", "agent"),
+                ("S", "summary"),
+                ("i", "issue"),
+                ("p", "PR"),
+                ("y", "copy dir"),
+                ("w", "worktrees"),
+                ("/", ""),
+                ("q", "quit"),
+            ]))
         };
         // a readable light gray so the hints stand out (the old dark gray was
         // too dim against most terminal backgrounds)
         f.render_widget(
-            Paragraph::new(text).style(Style::default().fg(Color::Gray)),
+            Paragraph::new(line).style(Style::default().fg(Color::Gray)),
             area,
         );
     }
+}
+
+fn key_span(s: &str) -> Span<'static> {
+    Span::styled(
+        s.to_string(),
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )
+}
+
+fn gray_span(s: impl Into<String>) -> Span<'static> {
+    Span::styled(s.into(), Style::default().fg(Color::Gray))
+}
+
+fn shortcut_spans(segments: &[(&str, &str)]) -> Vec<Span<'static>> {
+    let mut spans = Vec::with_capacity(segments.len() * 3);
+    for (i, (k, label)) in segments.iter().enumerate() {
+        if i > 0 {
+            spans.push(gray_span(" "));
+        }
+        spans.push(key_span(k));
+        if !label.is_empty() {
+            spans.push(gray_span(format!(" {}", label)));
+        }
+    }
+    spans
+}
+
+fn hint_spans(prefix: Option<String>, hints: &[(&str, &str)]) -> Vec<Span<'static>> {
+    let mut spans = Vec::with_capacity(hints.len() * 3 + 2);
+    let has_prefix = matches!(&prefix, Some(p) if !p.is_empty());
+    if let Some(p) = prefix {
+        if !p.is_empty() {
+            spans.push(gray_span(p));
+        }
+    }
+    for (i, (k, label)) in hints.iter().enumerate() {
+        if has_prefix || i > 0 {
+            spans.push(gray_span(" · "));
+        }
+        spans.push(key_span(k));
+        if !label.is_empty() {
+            spans.push(gray_span(format!(" {}", label)));
+        }
+    }
+    spans
 }
 
 /// Render the selected task's frontmatter as compact lines for the meta pane.
