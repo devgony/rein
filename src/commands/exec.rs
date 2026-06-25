@@ -405,7 +405,7 @@ pub fn run(ctx: &Ctx, query: Option<&str>) -> Result<String> {
         }
         RunAgent::Codex | RunAgent::Opencode => {
             let run = spawn_background(
-                &ctx.store, &task.id, &cmd, &dir, &task.id, &task.slug, &branch, &title,
+                &ctx.store, &task.id, &cmd, &dir, &task.id, &task.slug, &branch, &title, agent,
             )
             .with_context(|| format!("failed to launch {} run command", agent.as_str()))?;
             st.run_session = Some(run.pid.to_string());
@@ -516,13 +516,42 @@ fn run_shell_capture(
     )))
 }
 
-/// Background a foreground run agent (Codex or opencode) that has no daemon
-/// mode of its own: wrap it in a shell that captures stdout/stderr to
+/// Codex-only post-run probe (spliced into the EXIT trap): scan the JSON event
+/// log for a turn that started but never completed and mark it `interrupted`/
+/// `failed` before the shared `rein todo` check. opencode emits a different
+/// event schema, so it omits this entirely rather than scanning the log in vain.
+const CODEX_TURN_CHECK: &str = "__rein_last_event=$(awk '\n\
+     /^\\{\"type\":\"turn.started\"/ { last=\"turn.started\" }\n\
+     /^\\{\"type\":\"item.started\"/ { last=\"item.started\" }\n\
+     /^\\{\"type\":\"item.completed\"/ {\n\
+       if ($0 ~ /\"type\":\"command_execution\"/) last=\"command.completed\"\n\
+       else if ($0 ~ /\"type\":\"agent_message\"/) last=\"agent.completed\"\n\
+       else last=\"item.completed\"\n\
+     }\n\
+     /^\\{\"type\":\"item.failed\"/ { last=\"item.failed\" }\n\
+     /^\\{\"type\":\"error\"/ { last=\"error\" }\n\
+     END { print last }\n\
+     ' \"$__rein_log\" 2>/dev/null)\n\
+     case \"$__rein_last_event\" in\n\
+     turn.started|item.started|command.completed)\n\
+     printf 'rein post-run: codex turn interrupted before completion (last event: %s)\\n' \"$__rein_last_event\" >&2\n\
+     printf 'interrupted\\n' > \"$__rein_status\"\n\
+     return\n\
+     ;;\n\
+     error)\n\
+     printf 'rein post-run: codex emitted an error event\\n' >&2\n\
+     printf 'failed\\n' > \"$__rein_status\"\n\
+     return\n\
+     ;;\n\
+     esac\n";
+
+/// Background a foreground run agent (Codex or opencode) that has no daemon mode
+/// of its own: wrap it in a shell that captures stdout/stderr to
 /// `<store>/runs/*.log` and records an exit status to a sibling `.status` file
-/// via an EXIT trap, then spawn it detached. The trap's awk step recognizes
-/// Codex's JSON event types to flag a turn interrupted before completion; those
-/// patterns simply don't match opencode's events, which falls through to the
-/// shared exit-code + `rein todo` completeness check that applies to both.
+/// via an EXIT trap, then spawn it detached. Codex runs splice in
+/// `CODEX_TURN_CHECK` to flag an interrupted turn; opencode skips it and relies
+/// on the shared exit-code + `rein todo` completeness check.
+#[allow(clippy::too_many_arguments)]
 fn spawn_background(
     store: &Store,
     task_id: &str,
@@ -532,6 +561,7 @@ fn spawn_background(
     slug: &str,
     branch: &str,
     title: &str,
+    agent: RunAgent,
 ) -> Result<BackgroundRun> {
     let runs_dir = store.root.join("runs");
     std::fs::create_dir_all(&runs_dir)?;
@@ -553,6 +583,11 @@ fn spawn_background(
 
     let status_target = shell_quote(&status_path.to_string_lossy());
     let log_target = shell_quote(&log_path.to_string_lossy());
+    let event_check = if matches!(agent, RunAgent::Codex) {
+        CODEX_TURN_CHECK
+    } else {
+        ""
+    };
     let wrapped = format!(
         "__rein_status={status_target}\n\
          __rein_log={log_target}\n\
@@ -560,30 +595,7 @@ fn spawn_background(
          __rein_write_status() {{\n\
          __rein_code=$?\n\
          if [ \"$__rein_code\" -eq 0 ]; then\n\
-         __rein_last_event=$(awk '\n\
-         /^\\{{\"type\":\"turn.started\"/ {{ last=\"turn.started\" }}\n\
-         /^\\{{\"type\":\"item.started\"/ {{ last=\"item.started\" }}\n\
-         /^\\{{\"type\":\"item.completed\"/ {{\n\
-           if ($0 ~ /\"type\":\"command_execution\"/) last=\"command.completed\"\n\
-           else if ($0 ~ /\"type\":\"agent_message\"/) last=\"agent.completed\"\n\
-           else last=\"item.completed\"\n\
-         }}\n\
-         /^\\{{\"type\":\"item.failed\"/ {{ last=\"item.failed\" }}\n\
-         /^\\{{\"type\":\"error\"/ {{ last=\"error\" }}\n\
-         END {{ print last }}\n\
-         ' \"$__rein_log\" 2>/dev/null)\n\
-         case \"$__rein_last_event\" in\n\
-         turn.started|item.started|command.completed)\n\
-         printf 'rein post-run: codex turn interrupted before completion (last event: %s)\\n' \"$__rein_last_event\" >&2\n\
-         printf 'interrupted\\n' > \"$__rein_status\"\n\
-         return\n\
-         ;;\n\
-         error)\n\
-         printf 'rein post-run: codex emitted an error event\\n' >&2\n\
-         printf 'failed\\n' > \"$__rein_status\"\n\
-         return\n\
-         ;;\n\
-         esac\n\
+         {event_check}\
          __rein_todo=$(\"$__rein_bin\" todo --task \"$REIN_TASK\" 2>&1)\n\
          __rein_todo_code=$?\n\
          if [ \"$__rein_todo_code\" -ne 0 ]; then\n\
@@ -824,19 +836,37 @@ pub(crate) fn attach_command(ctx: &Ctx, query: Option<&str>) -> Result<AttachCom
     }
 }
 
+/// Whether `pid` is still a live process. The dashboard probes this per active
+/// codex/opencode run on every reload, so it uses `kill(pid, 0)` directly —
+/// signal 0 only error-checks (ESRCH = gone), it sends nothing — instead of
+/// forking a `kill` process each time. `EPERM` means the process exists but is
+/// owned by another user, which still counts as alive.
 fn process_alive(pid: &str) -> bool {
-    if pid.is_empty() || !pid.chars().all(|c| c.is_ascii_digit()) {
+    let Ok(pid) = pid.parse::<i32>() else {
+        return false;
+    };
+    if pid <= 0 {
         return false;
     }
-    Command::new("kill")
-        .arg("-0")
-        .arg(pid)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    #[cfg(unix)]
+    {
+        // SAFETY: `kill` is a plain libc call with no memory effects; signal 0
+        // performs permission/existence checks without delivering a signal.
+        let rc = unsafe { libc::kill(pid, 0) };
+        rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(not(unix))]
+    {
+        Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
 }
 
 /// Point at a task's most recent `rein run`, using the backend's native viewer

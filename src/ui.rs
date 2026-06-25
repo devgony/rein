@@ -2066,6 +2066,17 @@ fn load_all_rows(projects: &[StoreInfo]) -> Vec<TaskRow> {
     out
 }
 
+thread_local! {
+    /// repo_dir → cached `rein.runAgent` value. `load_all_rows` rebuilds every
+    /// row each reload (and every ~4s while a run is live); resolving the config
+    /// live costs two `git` subprocesses per project (`rev-parse` + `config`).
+    /// The value only changes through the `A` picker, which calls
+    /// `invalidate_run_agent_labels`, so memoizing keeps reloads off git. An
+    /// external `git config` edit isn't reflected until that or a restart.
+    static RUN_AGENT_LABELS: std::cell::RefCell<std::collections::HashMap<std::path::PathBuf, Option<String>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
 fn configured_run_agent_label(info: &StoreInfo) -> Option<String> {
     if let Ok(agent) = std::env::var("REIN_RUN_AGENT") {
         let agent = agent.trim();
@@ -2074,10 +2085,22 @@ fn configured_run_agent_label(info: &StoreInfo) -> Option<String> {
         }
     }
     let repo_dir = info.repo_dir.as_ref()?;
-    let repo = Repo::discover(repo_dir).ok()?;
-    repo.config_get("rein.runAgent")
-        .map(|agent| agent.trim().to_string())
-        .filter(|agent| !agent.is_empty())
+    if let Some(cached) = RUN_AGENT_LABELS.with(|c| c.borrow().get(repo_dir).cloned()) {
+        return cached;
+    }
+    let label = Repo::discover(repo_dir).ok().and_then(|repo| {
+        repo.config_get("rein.runAgent")
+            .map(|agent| agent.trim().to_string())
+            .filter(|agent| !agent.is_empty())
+    });
+    RUN_AGENT_LABELS.with(|c| c.borrow_mut().insert(repo_dir.clone(), label.clone()));
+    label
+}
+
+/// Drop the memoized run-agent labels so the next reload re-reads `rein.runAgent`
+/// — called after the `A` picker writes a project's run agent.
+fn invalidate_run_agent_labels() {
+    RUN_AGENT_LABELS.with(|c| c.borrow_mut().clear());
 }
 
 fn run_agent_name(label: &str) -> &str {
@@ -2612,6 +2635,7 @@ fn event_loop(
                         app.popup_error = true;
                     }
                 }
+                invalidate_run_agent_labels();
                 app.tasks = load_all_rows(projects);
             }
             UiAction::Summary(id) => {
