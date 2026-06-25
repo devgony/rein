@@ -620,6 +620,19 @@ fn task_list_title_shows_configured_run_agent_for_scoped_project() {
 }
 
 #[test]
+fn task_list_title_shows_default_run_agent_when_unconfigured() {
+    let row = rows_in("acme/web");
+    let mut app = App::new(row);
+    app.project_scope = Some("acme/web".into());
+    let screen = draw(&app);
+    assert!(
+        screen.contains("tasks [acme/web · agent: opencode (default) · all]"),
+        "a scoped project with no configured agent should show the default: {}",
+        screen
+    );
+}
+
+#[test]
 fn agent_picker_sets_scoped_project_run_agent() {
     let mut row = rows_in("acme/web");
     for t in &mut row {
@@ -857,7 +870,7 @@ fn project_scope_filters_task_list() {
         .iter()
         .all(|&i| app.tasks[i].project == "acme/web"));
     let screen = draw(&app);
-    assert!(screen.contains("tasks [acme/web · all]"));
+    assert!(screen.contains("tasks [acme/web · agent: opencode (default) · all]"));
     assert!(screen.contains("web-a — web-a title"));
     assert!(!screen.contains("tools-a"));
 }

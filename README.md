@@ -125,7 +125,7 @@ Open a draft PR with `rein pr [task] [--worktree]` (worktree-backed, else a main
 
 ## TUI (`rein ui`)
 
-A single dashboard across all your projects. Launched inside a repo, it pre-scopes to that project; press `P` to pick another. The task list title shows the scoped project's configured run agent (`REIN_RUN_AGENT` or project `rein.runAgent`) beside the project name. The right column shows a small **meta** pane — id, branch (tagged `(worktree)` or `(branch)`), the working `dir:`, issue/PR numbers, created/updated dates, tags, and the live `run:` state of the last `rein run` (running/done/failed, polled from the configured backend) — above the Markdown preview of the selected task. A task with a live run colors its task title green in the list.
+A single dashboard across all your projects. Launched inside a repo, it pre-scopes to that project; press `P` to pick another. The task list title shows the scoped project's run agent (`REIN_RUN_AGENT` or project `rein.runAgent`) beside the project name — when none is configured it shows the default tagged `agent: opencode (default)`, so you always see which backend `rein run` would use. The right column shows a small **meta** pane — id, branch (tagged `(worktree)` or `(branch)`), the working `dir:`, issue/PR numbers, created/updated dates, tags, and the live `run:` state of the last `rein run` (running/done/failed, polled from the configured backend) — above the Markdown preview of the selected task. A task with a live run colors its task title green in the list.
 
 | key     | action                                        |
 | ------- | --------------------------------------------- |

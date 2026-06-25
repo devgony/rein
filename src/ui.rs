@@ -1028,7 +1028,9 @@ impl App {
             },
             KeyCode::Char('A') => match self.agent_target_project() {
                 Some(project) => {
-                    let current = self.project_run_agent(&project).unwrap_or("opencode");
+                    let current = self
+                        .project_run_agent(&project)
+                        .unwrap_or_else(|| crate::commands::exec::default_run_agent());
                     self.agent_sel = RUN_AGENT_CHOICES
                         .iter()
                         .position(|agent| agent.as_str() == current)
@@ -1550,8 +1552,8 @@ impl App {
             })
             .collect();
         let mut title_parts = vec![self.scope_name()];
-        if let Some(agent) = self.scope_run_agent() {
-            title_parts.push(format!("agent: {}", agent));
+        if let Some(label) = self.scope_run_agent_label() {
+            title_parts.push(label);
         }
         title_parts.push(self.tab_name().to_string());
         let filter = if self.filter.is_empty() {
@@ -1564,9 +1566,20 @@ impl App {
         f.render_widget(list, area);
     }
 
-    fn scope_run_agent(&self) -> Option<&str> {
+    /// The scoped project's run-agent label for the task list title: the
+    /// explicitly configured backend, or the resolver's default tagged
+    /// `(default)` when none is set, so the dashboard always shows which agent
+    /// `rein run` would use. `None` only when no single project is scoped
+    /// (different projects can resolve to different agents).
+    fn scope_run_agent_label(&self) -> Option<String> {
         let project = self.project_scope.as_deref()?;
-        self.project_run_agent(project)
+        Some(match self.project_run_agent(project) {
+            Some(agent) => format!("agent: {}", agent),
+            None => format!(
+                "agent: {} (default)",
+                crate::commands::exec::default_run_agent()
+            ),
+        })
     }
 
     fn project_run_agent(&self, project: &str) -> Option<&str> {

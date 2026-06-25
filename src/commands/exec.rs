@@ -451,6 +451,13 @@ fn configured_run_agent(ctx: &Ctx, cmd: Option<&str>) -> Result<RunAgent> {
     Ok(cmd.and_then(infer_agent_from_command).unwrap_or(RunAgent::Opencode))
 }
 
+/// The backend `configured_run_agent` falls back to when nothing is configured,
+/// as a name. The single source of truth for the default, so the TUI can show
+/// which agent `rein run` would use even when the project hasn't picked one.
+pub(crate) fn default_run_agent() -> &'static str {
+    RunAgent::Opencode.as_str()
+}
+
 fn parse_run_agent(s: &str) -> Result<RunAgent> {
     match s.trim().to_ascii_lowercase().as_str() {
         "claude" => Ok(RunAgent::Claude),
