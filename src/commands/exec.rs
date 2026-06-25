@@ -565,7 +565,7 @@ fn spawn_background(
 ) -> Result<BackgroundRun> {
     let runs_dir = store.root.join("runs");
     std::fs::create_dir_all(&runs_dir)?;
-    let stamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
+    let stamp = chrono::Local::now().format("%Y%m%d%H%M%S%9f").to_string();
     let base = format!("{}-{}", util::slugify(task_id), stamp);
     let log_path = runs_dir.join(format!("{base}.log"));
     let status_path = runs_dir.join(format!("{base}.status"));
