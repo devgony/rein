@@ -40,8 +40,8 @@ pub struct TaskRow {
     pub tags: Vec<String>,
     pub shared: bool,
     /// State of the last `rein run`'s background session (`working`/`done`/…).
-    /// Claude runs are resolved from `claude agents`; Codex runs use rein's
-    /// wrapper status file.
+    /// Claude runs are resolved from `claude agents`; Codex and opencode runs
+    /// use rein's wrapper status file.
     pub run_state: Option<String>,
     /// Active run-agent name for this row's project, shown next to the scoped
     /// project name. `REIN_RUN_AGENT` overrides project git config.
@@ -143,6 +143,7 @@ pub enum StartMode {
 pub enum RunAgentChoice {
     Codex,
     Claude,
+    Opencode,
 }
 
 impl RunAgentChoice {
@@ -150,11 +151,16 @@ impl RunAgentChoice {
         match self {
             RunAgentChoice::Codex => "codex",
             RunAgentChoice::Claude => "claude",
+            RunAgentChoice::Opencode => "opencode",
         }
     }
 }
 
-const RUN_AGENT_CHOICES: [RunAgentChoice; 2] = [RunAgentChoice::Codex, RunAgentChoice::Claude];
+const RUN_AGENT_CHOICES: [RunAgentChoice; 3] = [
+    RunAgentChoice::Codex,
+    RunAgentChoice::Claude,
+    RunAgentChoice::Opencode,
+];
 
 const TABS: [Option<Status>; 5] = [
     None,
@@ -868,6 +874,12 @@ impl App {
                         return UiAction::SetRunAgent(project, RunAgentChoice::Claude);
                     }
                 }
+                KeyCode::Char('3') => {
+                    self.picking_agent = false;
+                    if let Some(project) = self.agent_target.take() {
+                        return UiAction::SetRunAgent(project, RunAgentChoice::Opencode);
+                    }
+                }
                 KeyCode::Enter => {
                     self.picking_agent = false;
                     if let Some(project) = self.agent_target.take() {
@@ -1204,7 +1216,7 @@ impl App {
         }
         lines.push(Line::from(""));
         lines.push(Line::styled(
-            "Enter select · j/k move · 1/2 choose · Esc cancel",
+            "Enter select · j/k move · 1/2/3 choose · Esc cancel",
             Style::default().fg(Color::DarkGray),
         ));
         let area = centered_rect(42, 28, f.area());
@@ -1899,10 +1911,11 @@ fn load_all_rows(projects: &[StoreInfo]) -> Vec<TaskRow> {
             let st = crate::state::load(&p.store, &t.id);
             let mut row = TaskRow::from_ref(&t, &p.project, &p.store.root);
             if let Some(id) = st.run_session.clone() {
-                if st.run_agent.as_deref() == Some("codex") {
-                    row.run_state = crate::commands::exec::codex_status_from_state(&st);
-                } else {
-                    claude_sessions.push((out.len(), id));
+                match st.run_agent.as_deref() {
+                    Some("codex") | Some("opencode") => {
+                        row.run_state = crate::commands::exec::bg_status_from_state(&st);
+                    }
+                    _ => claude_sessions.push((out.len(), id)),
                 }
             }
             row.worktree = st.worktree.clone();
@@ -2638,8 +2651,8 @@ fn event_loop(
     }
 }
 
-/// Return recent output for the selected task's most recent run. Codex writes a
-/// local JSON log that rein owns; Claude has a native `logs` command.
+/// Return recent output for the selected task's most recent run. Codex and
+/// opencode write a local log that rein owns; Claude has a native `logs` command.
 fn tail_run_log(ctx: &Ctx, task: &TaskRef, lines: usize) -> Result<String> {
     let st = crate::state::load(&ctx.store, &task.id);
     let session = st
@@ -2647,11 +2660,14 @@ fn tail_run_log(ctx: &Ctx, task: &TaskRef, lines: usize) -> Result<String> {
         .clone()
         .with_context(|| format!("no run recorded for '{}'", task.slug))?;
     match st.run_agent.as_deref().unwrap_or("claude") {
-        "codex" => {
-            let log = st
-                .run_log
-                .as_deref()
-                .with_context(|| format!("no Codex log recorded for '{}'", task.slug))?;
+        "codex" | "opencode" => {
+            let log = st.run_log.as_deref().with_context(|| {
+                format!(
+                    "no {} log recorded for '{}'",
+                    st.run_agent.as_deref().unwrap_or("codex"),
+                    task.slug
+                )
+            })?;
             let body = tail_file(log, lines)?;
             Ok(format!("{} · last {} lines\n\n{}", log, lines, body))
         }

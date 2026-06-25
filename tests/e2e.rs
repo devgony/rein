@@ -2137,6 +2137,163 @@ fn run_default_codex_command_separates_prompt_from_options() {
 }
 
 #[test]
+fn run_can_background_opencode_command() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo)
+        .args(["new", "job"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "job", "--worktree"])
+        .assert()
+        .success();
+    let marker = env.bin_dir.join("opencode_marker.txt");
+    rein(&env, &env.repo)
+        .env("REIN_RUN_AGENT", "opencode")
+        .env(
+            "REIN_RUN_CMD",
+            format!(
+                "printf '%s|%s|%s' \"$REIN_TASK\" \"$REIN_DIR\" \"$REIN_PROMPT\" > {}; printf '{{\"type\":\"step_start\",\"sessionID\":\"ses_opencode_1\",\"part\":{{}}}}\\n'",
+                marker.display()
+            ),
+        )
+        .args(["run", "job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("backgrounded opencode pid"));
+
+    let content = wait_for(&marker);
+    let id = task_id(&env, "active", "job");
+    assert!(content.contains(&id), "REIN_TASK not set: {}", content);
+    assert!(
+        content.contains("worktrees/job"),
+        "REIN_DIR not the worktree: {}",
+        content
+    );
+    assert!(
+        content.contains("rein todo"),
+        "REIN_PROMPT missing task instructions: {}",
+        content
+    );
+
+    let state = read(&store_root(&env).join("state").join(format!("{}.json", id)));
+    assert!(
+        state.contains(r#""run_agent": "opencode""#),
+        "run agent not recorded: {}",
+        state
+    );
+    assert!(
+        state.contains(r#""run_log""#),
+        "opencode log not recorded: {}",
+        state
+    );
+
+    rein(&env, &env.repo)
+        .args(["logs", "job"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("opencode pid")
+                .and(predicate::str::contains("tail -f"))
+                .and(predicate::str::contains("opencode --session ses_opencode_1"))
+                .and(predicate::str::contains(
+                    "opencode run --session ses_opencode_1 \"<prompt>\"",
+                )),
+        );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_infers_opencode_backend_from_run_cmd() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo)
+        .args(["new", "job"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "job", "--worktree"])
+        .assert()
+        .success();
+    let marker = env.bin_dir.join("fake_opencode_marker.txt");
+    let fake = env.bin_dir.join("opencode");
+    fs::write(&fake, "#!/bin/sh\nprintf '%s' \"$REIN_TASK\" > \"$1\"\n").unwrap();
+    make_executable(&fake);
+    let path = format!(
+        "{}:{}",
+        env.bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    rein(&env, &env.repo)
+        .env("PATH", path)
+        .env("REIN_RUN_CMD", format!("opencode {}", marker.display()))
+        .args(["run", "job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("backgrounded opencode pid"));
+
+    let id = task_id(&env, "active", "job");
+    assert_eq!(wait_for(&marker), id);
+    let state = read(&store_root(&env).join("state").join(format!("{}.json", id)));
+    assert!(
+        state.contains(r#""run_agent": "opencode""#),
+        "run agent not inferred: {}",
+        state
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn run_default_opencode_command_passes_prompt_as_message() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo)
+        .args(["new", "job"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "job", "--worktree"])
+        .assert()
+        .success();
+    let marker = env.bin_dir.join("default_opencode_args.txt");
+    let fake = env.bin_dir.join("opencode");
+    fs::write(
+        &fake,
+        "#!/bin/sh\ntmp=\"$OPENCODE_ARG_LOG.tmp\"\nfor arg in \"$@\"; do printf '<%s>\\n' \"$arg\"; done > \"$tmp\"\nmv \"$tmp\" \"$OPENCODE_ARG_LOG\"\nprintf '{\"type\":\"step_start\",\"sessionID\":\"ses_default\",\"part\":{}}\\n'\n",
+    )
+    .unwrap();
+    make_executable(&fake);
+    let path = format!(
+        "{}:{}",
+        env.bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    rein(&env, &env.repo)
+        .env("PATH", path)
+        .env("REIN_RUN_AGENT", "opencode")
+        .env("OPENCODE_ARG_LOG", &marker)
+        .args(["run", "job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("backgrounded opencode pid"));
+
+    let args = wait_for(&marker);
+    assert!(
+        args.contains("<run>\n<--format>\n<json>\n<--dangerously-skip-permissions>\n"),
+        "default opencode command must run json with skip-permissions: {}",
+        args
+    );
+    assert!(
+        args.contains("<Use the run-rein-task skill"),
+        "default opencode prompt must be the executable run prompt passed as the message: {}",
+        args
+    );
+}
+
+#[test]
 fn run_codex_status_file_survives_shell_exit() {
     let env = setup();
     init(&env);
@@ -2583,6 +2740,7 @@ fn title_and_goal_set_via_cli() {
         .stderr(predicate::str::contains("empty"));
 }
 
+#[cfg(unix)]
 #[test]
 fn summary_generates_title_and_goal_from_items_via_llm() {
     let env = setup();
@@ -2592,16 +2750,33 @@ fn summary_generates_title_and_goal_from_items_via_llm() {
         .assert()
         .success();
     seed_items(&env, "feat-v3"); // Tasks: 1,2 · Validation: 3
-                                 // a fake LLM: drains the piped prompt, returns the TITLE/GOAL contract
+    let fake = env.bin_dir.join("claude");
+    fs::write(
+        &fake,
+        "#!/bin/sh\ncat > \"$SUMMARY_PROMPT_LOG\"\nprintf '%s\\n' \"$@\" > \"$SUMMARY_ARGS_LOG\"\nprintf 'TITLE: v3 CLI ergonomics\\nGOAL: Round out the v3 CLI.\\nKeep it LLM-safe.\\n'\n",
+    )
+    .unwrap();
+    make_executable(&fake);
+    let path = format!(
+        "{}:{}",
+        env.bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let prompt_log = env.bin_dir.join("summary_prompt.txt");
+    let args_log = env.bin_dir.join("summary_args.txt");
     rein(&env, &env.repo)
-        .env(
-            "REIN_SUMMARY_CMD",
-            "cat >/dev/null; printf 'TITLE: v3 CLI ergonomics\\nGOAL: Round out the v3 CLI.\\nKeep it LLM-safe.\\n'",
-        )
+        .env("PATH", path)
+        .env("SUMMARY_PROMPT_LOG", &prompt_log)
+        .env("SUMMARY_ARGS_LOG", &args_log)
         .args(["summary", "feat-v3"])
         .assert()
         .success()
         .stdout(predicate::str::contains("summarized feat-v3"));
+    assert_eq!(read(&args_log), "-p\n");
+    assert!(
+        read(&prompt_log).contains("Do thing one"),
+        "summary prompt did not include task items"
+    );
     let doc = read(&store_root(&env).join("inbox/feat-v3.md"));
     assert!(
         doc.contains("title: v3 CLI ergonomics"),
@@ -2617,6 +2792,111 @@ fn summary_generates_title_and_goal_from_items_via_llm() {
     assert!(doc.contains("Do thing one"));
 }
 
+#[cfg(unix)]
+#[test]
+fn summary_uses_codex_when_run_agent_is_codex() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo)
+        .args(["new", "feat codex"])
+        .assert()
+        .success();
+    seed_items(&env, "feat-codex");
+    let fake = env.bin_dir.join("codex");
+    fs::write(
+        &fake,
+        "#!/bin/sh\n: > \"$SUMMARY_ARGS_LOG\"\nfor arg in \"$@\"; do printf '<%s>\\n' \"$arg\" >> \"$SUMMARY_ARGS_LOG\"; done\ncat > \"$SUMMARY_PROMPT_LOG\"\nprintf 'TITLE: Codex summary\\nGOAL: Use Codex for task summaries.\\n'\n",
+    )
+    .unwrap();
+    make_executable(&fake);
+    let path = format!(
+        "{}:{}",
+        env.bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let prompt_log = env.bin_dir.join("codex_summary_prompt.txt");
+    let args_log = env.bin_dir.join("codex_summary_args.txt");
+
+    rein(&env, &env.repo)
+        .env("PATH", path)
+        .env("REIN_RUN_AGENT", "codex")
+        .env("SUMMARY_PROMPT_LOG", &prompt_log)
+        .env("SUMMARY_ARGS_LOG", &args_log)
+        .args(["summary", "feat-codex"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("summarized feat-codex"));
+
+    assert_eq!(
+        read(&args_log),
+        "<exec>\n<--sandbox>\n<read-only>\n<-->\n<->\n"
+    );
+    assert!(
+        read(&prompt_log).contains("Do thing one"),
+        "summary prompt did not reach codex stdin"
+    );
+    let doc = read(&store_root(&env).join("inbox/feat-codex.md"));
+    assert!(doc.contains("title: Codex summary"), "doc: {}", doc);
+    assert!(
+        doc.contains("## Goal\n\nUse Codex for task summaries."),
+        "doc: {}",
+        doc
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn summary_uses_opencode_when_run_agent_is_opencode() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo)
+        .args(["new", "feat opencode"])
+        .assert()
+        .success();
+    seed_items(&env, "feat-opencode");
+    let fake = env.bin_dir.join("opencode");
+    fs::write(
+        &fake,
+        "#!/bin/sh\n: > \"$SUMMARY_ARGS_LOG\"\nfor arg in \"$@\"; do printf '<%s>\\n' \"$arg\" >> \"$SUMMARY_ARGS_LOG\"; done\nprintf 'TITLE: Opencode summary\\nGOAL: Use opencode for task summaries.\\n'\n",
+    )
+    .unwrap();
+    make_executable(&fake);
+    let path = format!(
+        "{}:{}",
+        env.bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let args_log = env.bin_dir.join("opencode_summary_args.txt");
+
+    rein(&env, &env.repo)
+        .env("PATH", path)
+        .env("REIN_RUN_AGENT", "opencode")
+        .env("SUMMARY_ARGS_LOG", &args_log)
+        .args(["summary", "feat-opencode"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("summarized feat-opencode"));
+
+    let args = read(&args_log);
+    assert!(
+        args.starts_with("<run>\n"),
+        "opencode summary must invoke `opencode run`: {}",
+        args
+    );
+    assert!(
+        args.contains("Do thing one"),
+        "summary prompt must reach opencode as the message argument (via $(cat)): {}",
+        args
+    );
+    let doc = read(&store_root(&env).join("inbox/feat-opencode.md"));
+    assert!(doc.contains("title: Opencode summary"), "doc: {}", doc);
+    assert!(
+        doc.contains("## Goal\n\nUse opencode for task summaries."),
+        "doc: {}",
+        doc
+    );
+}
+
 #[test]
 fn summary_refuses_when_there_are_no_items() {
     let env = setup();
@@ -2626,7 +2906,6 @@ fn summary_refuses_when_there_are_no_items() {
         .assert()
         .success();
     rein(&env, &env.repo)
-        .env("REIN_SUMMARY_CMD", "printf 'TITLE: x\\nGOAL: y\\n'")
         .args(["summary", "empty"])
         .assert()
         .failure()

@@ -71,7 +71,7 @@ rein open settings-cleanup    # write Goal/Tasks/Validation in $EDITOR
 rein start settings-cleanup   # inbox → active, sets current to this task
 ```
 
-`rein title <text>` / `rein goal <text>` set the frontmatter title and the `## Goal` section through rein (LLM-safe — rein owns the write, no direct Markdown edits). Listed the items but the title/Goal are still a placeholder? `rein summary [task]` has an LLM summarize the items into a concise title + Goal and applies both through that same safe path — the LLM only returns text. The command is configurable (`REIN_SUMMARY_CMD` env → git `rein.summary` → default `claude -p`), the prompt (the item list) is piped on stdin, and the reply must be `TITLE: …` / `GOAL: …`.
+`rein title <text>` / `rein goal <text>` set the frontmatter title and the `## Goal` section through rein (LLM-safe — rein owns the write, no direct Markdown edits). Listed the items but the title/Goal are still a placeholder? `rein summary [task]` has the configured run agent summarize the items into a concise title + Goal and applies both through that same safe path — the LLM only returns text. The summary backend follows `REIN_RUN_AGENT` → git config `rein.runAgent` → `claude`; Claude uses `claude -p`, Codex uses `codex exec --sandbox read-only -- -`, and opencode uses `opencode run "$(cat)"`. The prompt (the item list) is piped on stdin, and the reply must be `TITLE: …` / `GOAL: …`.
 
 Then hand it to Claude Code; following the skill rules, the LLM proceeds:
 
@@ -140,9 +140,9 @@ A single dashboard across all your projects. Launched inside a repo, it pre-scop
 | `d`     | done                                          |
 | `D`     | delete permanently (asks `y` to confirm; removes files + worktree) |
 | `x`     | run an agent on the task in the background (`REIN_RUN_CMD`) |
-| `a`     | attach/resume the task's last run (`claude attach` or `codex resume --include-non-interactive`) |
+| `a`     | attach/resume the task's last run (`claude attach`, `codex resume --include-non-interactive`, or `opencode --session`) |
 | `L`     | show recent log output for the selected running task |
-| `A`     | choose the project's run agent (`codex` or `claude`) |
+| `A`     | choose the project's run agent (`codex`, `claude`, or `opencode`) |
 | `S`     | summarize the task's checklist items into title + Goal via the configured LLM (`rein summary`); runs on a worker thread with a spinner overlay so the slow LLM call doesn't freeze the dashboard (`Ctrl-c` still quits) |
 | `i`     | create the issue (pick a GitHub Project, or none), or push to an existing one (on a sync conflict, press `f` to force-push) |
 | `p`     | open a draft PR (then `w` worktree / `b` branch), or push to an existing one (on a sync conflict, press `f` to force-push) |
@@ -241,7 +241,7 @@ rein doctor                          rebuild state/, fix frontmatter drift
 rein status | root | ui
 ```
 
-## LLM integration (Claude or Codex)
+## LLM integration (Claude, Codex, or opencode)
 
 ```sh
 rein init --skill   # scaffold .claude/ and .agents/ run-rein-task skills
@@ -251,9 +251,9 @@ The skill gets remaining items via `rein todo` and changes state only through `r
 
 ### Launching the agent (`rein run`)
 
-You don't have to `cd` into a worktree to work a task — rein already knows where each task lives. `rein run [task]` (TUI: `x`) launches an agent **in the background**, with its cwd set to the task's worktree (or the main repo if the task only has a branch) and `REIN_TASK`/`REIN_SLUG`/`REIN_BRANCH`/`REIN_DIR`/`REIN_TITLE`/`REIN_PROMPT` exported, so the agent resolves the task no matter where it was invoked. Claude Code backgrounds itself with `claude --bg`; Codex's local `codex exec` is foreground-only, so rein backgrounds it and writes stdout/stderr under `<store>/runs/`.
+You don't have to `cd` into a worktree to work a task — rein already knows where each task lives. `rein run [task]` (TUI: `x`) launches an agent **in the background**, with its cwd set to the task's worktree (or the main repo if the task only has a branch) and `REIN_TASK`/`REIN_SLUG`/`REIN_BRANCH`/`REIN_DIR`/`REIN_TITLE`/`REIN_PROMPT` exported, so the agent resolves the task no matter where it was invoked. Claude Code backgrounds itself with `claude --bg`; Codex's local `codex exec` and `opencode run` are foreground-only, so rein backgrounds them and writes stdout/stderr under `<store>/runs/`.
 
-The agent backend is resolved from `REIN_RUN_AGENT` → git config `rein.runAgent` → inferred from a configured `REIN_RUN_CMD` whose first word is `codex` → `claude`. The command template is resolved from `REIN_RUN_CMD` env → git config `rein.run` → the backend default.
+The agent backend is resolved from `REIN_RUN_AGENT` → git config `rein.runAgent` → inferred from a configured `REIN_RUN_CMD` whose first word is `codex`/`opencode` → `claude`. The command template is resolved from `REIN_RUN_CMD` env → git config `rein.run` → the backend default.
 
 Claude default:
 
@@ -267,21 +267,28 @@ Codex default:
 codex exec --json --sandbox danger-full-access --add-dir "$REIN_ROOT" -- "$REIN_PROMPT"
 ```
 
-`claude --bg` dispatches a **tracked background session** (it runs under Claude Code's daemon, not a detached `-p` process) and returns immediately. Claude-compatible custom commands should likewise return promptly (self-background) because `rein run` waits for that command and surfaces its output. Codex backend commands are the exception: rein spawns them in the background and records their pid/log/status itself.
+opencode default:
+
+```sh
+opencode run --format json --dangerously-skip-permissions "$REIN_PROMPT"
+```
+
+`claude --bg` dispatches a **tracked background session** (it runs under Claude Code's daemon, not a detached `-p` process) and returns immediately. Claude-compatible custom commands should likewise return promptly (self-background) because `rein run` waits for that command and surfaces its output. Codex and opencode backend commands are the exception: rein spawns them in the background and records their pid/log/status itself.
 
 `--name "$REIN_TITLE"` pins the session's display name (shown in `claude agents`, the picker, and the terminal title) to `rein:<branch>:<open task numbers>` — the open (unchecked, unfailed) checklist item numbers, with consecutive runs of three or more folded into a range, e.g. `rein:feat-v3:1~12,14,16`. rein exports the computed name as `REIN_TITLE`; a custom command can reference `$REIN_TITLE` (or set its own `--name`). rein still tracks the session by its **id** regardless of the name.
 
-**Watching it.** `claude --bg` prints a session id, which `rein run` echoes and records. Codex runs record the wrapper pid, log path, and exit-code file. The TUI shows the live state in the `run:` line of the meta pane (and a green `●` in the list while it's running), refreshed automatically every few seconds. For Claude, `rein logs [task]` reprints `claude agents`/`attach`/`logs` hints. For Codex, `rein logs [task]` prints the pid, run state, status file, local log, a `tail -f` command, and when the default JSON mode has emitted a `thread.started` event, the exact `codex resume --include-non-interactive <thread-id>` command for opening the interactive UI. A Codex process exit code of `0` is shown as `succeeded`; if its JSON log stops on a started turn/item or a command result with no follow-up assistant message, rein records `interrupted`, and if the turn ends but `rein todo --task <id>` still reports unchecked items, rein records `incomplete` instead. It also prints `codex exec resume <thread-id> "<prompt>"` for non-interactive continuation. In the TUI, press `a` to open the native agent UI for the selected task's last run (`claude attach <id>` or `codex resume --include-non-interactive <thread-id>`). Task progress also shows as the checklist and Agent Log fill in (the agent reports through `rein check`/`rein log`).
+**Watching it.** `claude --bg` prints a session id, which `rein run` echoes and records. Codex and opencode runs record the wrapper pid, log path, and exit-code file. The TUI shows the live state in the `run:` line of the meta pane (and a green `●` in the list while it's running), refreshed automatically every few seconds. For Claude, `rein logs [task]` reprints `claude agents`/`attach`/`logs` hints. For Codex, `rein logs [task]` prints the pid, run state, status file, local log, a `tail -f` command, and when the default JSON mode has emitted a `thread.started` event, the exact `codex resume --include-non-interactive <thread-id>` command for opening the interactive UI. A Codex process exit code of `0` is shown as `succeeded`; if its JSON log stops on a started turn/item or a command result with no follow-up assistant message, rein records `interrupted`, and if the turn ends but `rein todo --task <id>` still reports unchecked items, rein records `incomplete` instead. It also prints `codex exec resume <thread-id> "<prompt>"` for non-interactive continuation. For opencode, `rein logs [task]` prints the same pid/state/status/log/`tail -f`, and once the `--format json` stream carries a `sessionID` it prints `opencode --session <id>` (open the interactive UI) and `opencode run --session <id> "<prompt>"` (continue non-interactively); a `0` exit is `succeeded`, a non-zero exit `failed`, and a clean exit with unchecked items left `incomplete`. In the TUI, press `a` to open the native agent UI for the selected task's last run (`claude attach <id>`, `codex resume --include-non-interactive <thread-id>`, or `opencode --session <id>`). Task progress also shows as the checklist and Agent Log fill in (the agent reports through `rein check`/`rein log`).
 
-Use Codex locally with:
+Use Codex or opencode locally with:
 
 ```sh
-git config rein.runAgent codex
+git config rein.runAgent codex      # or: opencode
 # or one-off:
 REIN_RUN_AGENT=codex rein run my-task
+REIN_RUN_AGENT=opencode rein run my-task
 ```
 
-This uses local `codex exec`, not `codex cloud exec`. Cloud tasks run in configured Codex cloud environments and count against Codex cloud-task usage; use them explicitly with a custom `REIN_RUN_CMD` only when you want that remote execution model.
+Codex uses local `codex exec`, not `codex cloud exec`. Cloud tasks run in configured Codex cloud environments and count against Codex cloud-task usage; use them explicitly with a custom `REIN_RUN_CMD` only when you want that remote execution model. opencode runs the local `opencode run` headless mode with `--dangerously-skip-permissions` so the detached agent can edit files and call `rein` without prompting; like Codex it has no daemon, so rein backgrounds it and owns the log.
 
 Override the command for a different agent or flags, e.g. `git config rein.run 'claude --name rein:$REIN_SLUG -p /run-rein-task'` (this example names the session after the slug instead of the default branch + task numbers). A custom Codex command can use `$REIN_PROMPT`, or just start with `codex` so rein infers the Codex backend. Notes:
 

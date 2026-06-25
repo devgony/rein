@@ -25,10 +25,10 @@ pub struct TaskState {
     /// Session id of the most recent `rein run`, used to locate its transcript.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_session: Option<String>,
-    /// Agent backend that created `run_session` (`claude` or `codex`).
+    /// Agent backend that created `run_session` (`claude`, `codex`, or `opencode`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_agent: Option<String>,
-    /// Log file for backends that rein backgrounds directly (currently Codex).
+    /// Log file for backends that rein backgrounds directly (Codex, opencode).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_log: Option<String>,
     /// Exit-code file written by rein's background wrapper.

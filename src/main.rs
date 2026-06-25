@@ -62,7 +62,7 @@ enum Cmd {
         task: Option<String>,
     },
     /// Summarize the task's items into a title + Goal via an LLM, applied through
-    /// rein (REIN_SUMMARY_CMD → git rein.summary → default `claude -p`)
+    /// rein (uses the configured run agent: REIN_RUN_AGENT → git rein.runAgent)
     Summary { task: Option<String> },
     /// Switch the task binding (worktree pointer inside a bound worktree, current file otherwise)
     Use { task: String },
