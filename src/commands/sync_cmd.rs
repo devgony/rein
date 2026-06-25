@@ -84,7 +84,10 @@ fn import_new(ctx: &Ctx, ri: &crate::gh::RemoteIssue, marker_id: Option<String>)
         doc.body = task::body_from_remote(&inner, &doc.body);
     }
     doc.front.github_issue = Some(ri.number);
-    let path = ctx.store.status_dir(Status::Inbox).join(format!("{}.md", slug));
+    let path = ctx
+        .store
+        .status_dir(Status::Inbox)
+        .join(format!("{}.md", slug));
     ctx.store.write_doc(&path, &doc)?;
 
     let block = task::issue_projection(&doc);
@@ -113,7 +116,11 @@ fn pull_into(ctx: &Ctx, task: &TaskRef, remote_body: &str, strict: bool) -> Resu
     let remote_hash = remote_block.as_deref().map(sync::hash_block);
     let st = state::load(&ctx.store, &task.id);
 
-    match sync::plan(st.issue_synced_hash.as_deref(), &local_hash, remote_hash.as_deref()) {
+    match sync::plan(
+        st.issue_synced_hash.as_deref(),
+        &local_hash,
+        remote_hash.as_deref(),
+    ) {
         SyncPlan::UpToDate | SyncPlan::Push => Ok(false), // pull never writes remote
         SyncPlan::Pull => {
             let (_, _, inner) =
@@ -154,7 +161,11 @@ pub fn pull(ctx: &Ctx) -> Result<()> {
     let changed = pull_into(ctx, &task, &remote_body, true)?;
     println!(
         "pull: {}",
-        if changed { "updated from remote" } else { "up to date" }
+        if changed {
+            "updated from remote"
+        } else {
+            "up to date"
+        }
     );
     Ok(())
 }
@@ -231,12 +242,47 @@ pub fn push_pr(ctx: &Ctx, task: &TaskRef, force: bool) -> Result<()> {
     push_surface(ctx, &task, &gh, Surface::Pr(number), force)
 }
 
+/// Push the managed PR section, then push the task's recorded git branch.
+///
+/// This is used by the TUI `p` shortcut for an existing PR: the shortcut should
+/// publish both the task metadata and the commits that back the PR. If the task
+/// has no recorded branch, keep the historical body-sync behavior.
+pub fn push_pr_and_branch(ctx: &Ctx, task: &TaskRef, force: bool) -> Result<()> {
+    push_pr(ctx, task, force)?;
+    push_task_branch(ctx, task)
+}
+
+/// Push the task's recorded git branch to origin. If the task has no recorded
+/// branch, there is no deterministic branch to publish, so this is a no-op.
+pub fn push_task_branch(ctx: &Ctx, task: &TaskRef) -> Result<()> {
+    let task = ctx
+        .store
+        .find_by_id(&task.id)
+        .unwrap_or_else(|| task.clone());
+    let branch = task
+        .doc
+        .front
+        .branch
+        .clone()
+        .or_else(|| state::load(&ctx.store, &task.id).branch);
+    if let Some(branch) = branch {
+        ctx.repo.push_branch(&branch)?;
+    }
+    Ok(())
+}
+
 enum Surface {
     Issue(u64),
     Pr(u64),
 }
 
-fn push_surface(ctx: &Ctx, task: &TaskRef, gh: &Gh, surface: Surface, resolved: bool) -> Result<()> {
+fn push_surface(
+    ctx: &Ctx,
+    task: &TaskRef,
+    gh: &Gh,
+    surface: Surface,
+    resolved: bool,
+) -> Result<()> {
     let (name, number, local_block, base) = match &surface {
         Surface::Issue(n) => (
             "issue",
@@ -309,7 +355,11 @@ pub fn attach_issue(ctx: &Ctx, number: u64) -> Result<()> {
     let (task, _) = resolve::resolve_task(ctx, None)?;
     if let Some(existing) = ctx.store.find_by_issue(number) {
         if existing.id != task.id {
-            bail!("issue #{} is already attached to '{}'", number, existing.slug);
+            bail!(
+                "issue #{} is already attached to '{}'",
+                number,
+                existing.slug
+            );
         }
     }
     let mut doc = task.doc.clone();
@@ -335,7 +385,10 @@ pub fn attach_pr(ctx: &Ctx, number: u64) -> Result<()> {
             number, task.slug, issue
         );
     } else {
-        println!("attached PR #{} to {} — run `rein push` to publish the managed section", number, task.slug);
+        println!(
+            "attached PR #{} to {} — run `rein push` to publish the managed section",
+            number, task.slug
+        );
     }
     Ok(())
 }

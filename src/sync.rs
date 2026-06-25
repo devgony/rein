@@ -42,7 +42,12 @@ pub fn conflict_paths(store: &Store, task: &TaskRef) -> (std::path::PathBuf, std
     )
 }
 
-pub fn write_conflict(store: &Store, task: &TaskRef, local_block: &str, remote_block: &str) -> Result<()> {
+pub fn write_conflict(
+    store: &Store,
+    task: &TaskRef,
+    local_block: &str,
+    remote_block: &str,
+) -> Result<()> {
     let (lp, rp) = conflict_paths(store, task);
     fs::create_dir_all(store.conflicts_dir())?;
     util::atomic_write(&lp, &format!("{}\n", local_block.trim()))?;

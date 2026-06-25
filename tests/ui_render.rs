@@ -1,9 +1,13 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::backend::TestBackend;
+use ratatui::buffer::Buffer;
+use ratatui::style::Color;
 use ratatui::Terminal;
 use rein::gitx::Worktree;
 use rein::store::Status;
-use rein::ui::{App, ForcePush, ForceSurface, StartMode, Summarizing, TaskRow, UiAction};
+use rein::ui::{
+    App, ForcePush, ForceSurface, RunAgentChoice, StartMode, Summarizing, TaskRow, UiAction,
+};
 use std::path::PathBuf;
 
 fn rows() -> Vec<TaskRow> {
@@ -29,6 +33,7 @@ fn rows_in(project: &str) -> Vec<TaskRow> {
         project: project.clone(),
         store_root: PathBuf::from("/store"),
         run_state: None,
+        run_agent_config: None,
         worktree: None,
         repo_dir: None,
     };
@@ -51,7 +56,12 @@ fn rows_multi() -> Vec<TaskRow> {
         slug: slug.to_string(),
         title: format!("{} title", slug),
         status,
-        path: PathBuf::from(format!("/store/{}/{}/{}.md", project, status.as_str(), slug)),
+        path: PathBuf::from(format!(
+            "/store/{}/{}/{}.md",
+            project,
+            status.as_str(),
+            slug
+        )),
         body: format!("## Goal\n\n{}", slug),
         branch: None,
         github_issue: None,
@@ -63,6 +73,7 @@ fn rows_multi() -> Vec<TaskRow> {
         project: project.to_string(),
         store_root: PathBuf::from(format!("/store/{}", project)),
         run_state: None,
+        run_agent_config: None,
         worktree: None,
         repo_dir: None,
     };
@@ -73,11 +84,15 @@ fn rows_multi() -> Vec<TaskRow> {
     ]
 }
 
-fn draw(app: &App) -> String {
+fn render_buffer(app: &App) -> Buffer {
     let backend = TestBackend::new(160, 30);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| app.render(f)).unwrap();
-    let buf = terminal.backend().buffer().clone();
+    terminal.backend().buffer().clone()
+}
+
+fn draw(app: &App) -> String {
+    let buf = render_buffer(app);
     let w = buf.area.width as usize;
     buf.content
         .iter()
@@ -90,6 +105,20 @@ fn draw(app: &App) -> String {
             s
         })
         .collect()
+}
+
+fn first_cell_fg(buf: &Buffer, needle: &str) -> Option<Color> {
+    for y in 0..buf.area.height {
+        for x in 0..buf.area.width {
+            let rest: String = (x..buf.area.width)
+                .map(|xx| buf[(xx, y)].symbol())
+                .collect();
+            if rest.starts_with(needle) {
+                return Some(buf[(x, y)].fg);
+            }
+        }
+    }
+    None
 }
 
 fn key(app: &mut App, code: KeyCode) -> UiAction {
@@ -191,7 +220,10 @@ fn keys_dispatch_to_cli_verbs() {
     let action = key(&mut app, KeyCode::Char('d'));
     assert_eq!(action, UiAction::Done("task-20260613-auth-refactor".into()));
     let action = key(&mut app, KeyCode::Char('i'));
-    assert_eq!(action, UiAction::Issue("task-20260613-auth-refactor".into()));
+    assert_eq!(
+        action,
+        UiAction::Issue("task-20260613-auth-refactor".into())
+    );
     // q quits
     assert_eq!(key(&mut app, KeyCode::Char('q')), UiAction::Quit);
 }
@@ -307,6 +339,16 @@ fn x_runs_only_active_tasks() {
 }
 
 #[test]
+fn a_attaches_selected_tasks_last_run() {
+    let mut app = App::new(rows());
+    key(&mut app, KeyCode::Char('j'));
+    assert_eq!(
+        key(&mut app, KeyCode::Char('a')),
+        UiAction::AttachRun("task-20260613-auth-refactor".into())
+    );
+}
+
+#[test]
 fn shift_s_summarizes_task_with_items() {
     let mut app = App::new(rows());
     // settings-cleanup (index 0) has checklist items → S emits Summary
@@ -331,7 +373,11 @@ fn summarizing_overlay_shows_spinner_and_swallows_keys() {
         started: std::time::Instant::now(),
     });
     let screen = draw(&app);
-    assert!(screen.contains("summary"), "overlay title missing: {}", screen);
+    assert!(
+        screen.contains("summary"),
+        "overlay title missing: {}",
+        screen
+    );
     assert!(
         screen.contains("summarizing settings-cleanup"),
         "spinner label missing: {}",
@@ -343,7 +389,10 @@ fn summarizing_overlay_shows_spinner_and_swallows_keys() {
     assert_eq!(key(&mut app, KeyCode::Char('S')), UiAction::None);
     // but Ctrl-c still quits so the user is never trapped on a slow LLM
     assert_eq!(
-        app.on_key(KeyEvent::new(KeyCode::Char('c'), crossterm::event::KeyModifiers::CONTROL)),
+        app.on_key(KeyEvent::new(
+            KeyCode::Char('c'),
+            crossterm::event::KeyModifiers::CONTROL
+        )),
         UiAction::Quit
     );
 }
@@ -358,9 +407,21 @@ fn force_push_offer_prompts_then_f_overwrites() {
     });
     // the overlay explains the conflict and the force-push choice
     let screen = draw(&app);
-    assert!(screen.contains("sync conflict"), "title missing: {}", screen);
-    assert!(screen.contains("settings-cleanup"), "slug missing: {}", screen);
-    assert!(screen.contains("force-push"), "force hint missing: {}", screen);
+    assert!(
+        screen.contains("sync conflict"),
+        "title missing: {}",
+        screen
+    );
+    assert!(
+        screen.contains("settings-cleanup"),
+        "slug missing: {}",
+        screen
+    );
+    assert!(
+        screen.contains("force-push"),
+        "force hint missing: {}",
+        screen
+    );
     // `f` confirms the force-push for the surface that conflicted
     assert_eq!(
         key(&mut app, KeyCode::Char('f')),
@@ -514,8 +575,86 @@ fn run_state_shows_in_meta_and_list() {
     assert_eq!(app.selected_task().unwrap().slug, "auth-refactor");
     let screen = draw(&app);
     assert!(screen.contains("run: "), "meta should show a run line");
-    assert!(screen.contains("running"), "working state renders as 'running'");
-    assert!(screen.contains("●"), "a live run shows a dot in the list");
+    assert!(
+        screen.contains("running"),
+        "working state renders as 'running'"
+    );
+    assert!(
+        !screen.contains("●"),
+        "a live run should not render the old trailing dot"
+    );
+    let buf = render_buffer(&app);
+    assert_eq!(
+        first_cell_fg(&buf, "auth-refactor — Auth refactor"),
+        Some(Color::Green),
+        "a live run colors the task title green"
+    );
+    app.spinner_frame = 1;
+    let buf = render_buffer(&app);
+    assert_eq!(
+        first_cell_fg(&buf, "auth-refactor — Auth refactor"),
+        Some(Color::LightGreen),
+        "the running task title pulses between green shades"
+    );
+}
+
+#[test]
+fn task_list_title_shows_configured_run_agent_for_scoped_project() {
+    let mut row = rows_in("acme/web");
+    for t in &mut row {
+        t.run_agent_config = Some("rein.runAgent=codex".into());
+    }
+    let mut app = App::new(row);
+    app.project_scope = Some("acme/web".into());
+    let screen = draw(&app);
+    assert!(
+        screen.contains("tasks [acme/web · agent: codex · all]"),
+        "task list title should show the configured run agent once by project: {}",
+        screen
+    );
+    assert!(
+        !screen.contains("agent: rein.runAgent=codex"),
+        "run agent should be shown as the bare backend name: {}",
+        screen
+    );
+}
+
+#[test]
+fn task_list_title_shows_default_run_agent_when_unconfigured() {
+    let row = rows_in("acme/web");
+    let mut app = App::new(row);
+    app.project_scope = Some("acme/web".into());
+    let screen = draw(&app);
+    assert!(
+        screen.contains("tasks [acme/web · agent: opencode (default) · all]"),
+        "a scoped project with no configured agent should show the default: {}",
+        screen
+    );
+}
+
+#[test]
+fn agent_picker_sets_scoped_project_run_agent() {
+    let mut row = rows_in("acme/web");
+    for t in &mut row {
+        t.run_agent_config = Some("codex".into());
+    }
+    let mut app = App::new(row);
+    app.project_scope = Some("acme/web".into());
+
+    assert_eq!(key(&mut app, KeyCode::Char('A')), UiAction::None);
+    assert!(app.picking_agent);
+    let screen = draw(&app);
+    assert!(screen.contains("run agent"));
+    assert!(screen.contains("project: acme/web"));
+    assert!(screen.contains("codex"));
+    assert!(screen.contains("claude"));
+
+    assert_eq!(key(&mut app, KeyCode::Down), UiAction::None);
+    assert_eq!(
+        key(&mut app, KeyCode::Enter),
+        UiAction::SetRunAgent("acme/web".into(), RunAgentChoice::Claude)
+    );
+    assert!(!app.picking_agent);
 }
 
 #[test]
@@ -565,6 +704,25 @@ fn keybinding_hint_advertises_new_and_move() {
     assert!(screen.contains("p PR"));
     assert!(screen.contains("y copy dir"));
     assert!(screen.contains("x run"));
+    assert!(screen.contains("a attach"));
+    assert!(screen.contains("L log"));
+    assert!(screen.contains("A agent"));
+}
+
+#[test]
+fn shift_l_shows_tail_log_for_running_task() {
+    let mut with_run = rows();
+    with_run[1].run_state = Some("working".into());
+    let mut app = App::new(with_run);
+    key(&mut app, KeyCode::Char('j')); // auth-refactor
+    assert_eq!(
+        key(&mut app, KeyCode::Char('L')),
+        UiAction::TailLog("task-20260613-auth-refactor".into())
+    );
+
+    let mut app = App::new(rows());
+    assert_eq!(key(&mut app, KeyCode::Char('L')), UiAction::None);
+    assert!(app.message.contains("no running log"));
 }
 
 #[test]
@@ -643,7 +801,10 @@ fn status_message_clears_on_next_key() {
     key(&mut app, KeyCode::Char('j'));
     assert!(app.message.is_empty());
     let screen = draw(&app);
-    assert!(screen.contains("i issue"), "hint returns after the message clears");
+    assert!(
+        screen.contains("i issue"),
+        "hint returns after the message clears"
+    );
 }
 
 #[test]
@@ -704,9 +865,12 @@ fn project_scope_filters_task_list() {
     // scoping to one project hides the others (and the now-redundant tag)
     app.project_scope = Some("acme/web".into());
     assert_eq!(app.visible().len(), 2);
-    assert!(app.visible().iter().all(|&i| app.tasks[i].project == "acme/web"));
+    assert!(app
+        .visible()
+        .iter()
+        .all(|&i| app.tasks[i].project == "acme/web"));
     let screen = draw(&app);
-    assert!(screen.contains("tasks [acme/web · all]"));
+    assert!(screen.contains("tasks [acme/web · agent: opencode (default) · all]"));
     assert!(screen.contains("web-a — web-a title"));
     assert!(!screen.contains("tools-a"));
 }
@@ -788,6 +952,7 @@ fn one_row(body: &str) -> App {
         project: String::new(),
         store_root: PathBuf::from("/store"),
         run_state: None,
+        run_agent_config: None,
         worktree: None,
         repo_dir: None,
     };
@@ -903,7 +1068,7 @@ fn item_view_hint_advertises_new() {
 fn e_in_item_view_edits_the_selected_item() {
     let mut app = App::new(rows());
     key(&mut app, KeyCode::Char('l')); // drill into settings-cleanup's items
-    // e opens the editor prefilled with the current item text
+                                       // e opens the editor prefilled with the current item text
     assert_eq!(key(&mut app, KeyCode::Char('e')), UiAction::None);
     assert!(app.editing_item);
     assert_eq!(app.input, "Layout");
@@ -1182,6 +1347,10 @@ fn h_esc_and_q_step_back_out_of_worktree_view() {
     for back in [KeyCode::Char('h'), KeyCode::Esc, KeyCode::Char('q')] {
         let mut app = worktree_view();
         assert_eq!(key(&mut app, back), UiAction::None);
-        assert!(!app.viewing_worktrees, "{:?} should leave the worktree view", back);
+        assert!(
+            !app.viewing_worktrees,
+            "{:?} should leave the worktree view",
+            back
+        );
     }
 }

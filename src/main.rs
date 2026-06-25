@@ -4,7 +4,11 @@ use rein::commands::{exec, local, sync_cmd};
 use rein::Ctx;
 
 #[derive(Parser)]
-#[command(name = "rein", version, about = "LLM task journal + shared inbox manager")]
+#[command(
+    name = "rein",
+    version,
+    about = "LLM task journal + shared inbox manager"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -58,7 +62,7 @@ enum Cmd {
         task: Option<String>,
     },
     /// Summarize the task's items into a title + Goal via an LLM, applied through
-    /// rein (REIN_SUMMARY_CMD → git rein.summary → default `claude -p`)
+    /// rein (uses the configured run agent: REIN_RUN_AGENT → git rein.runAgent)
     Summary { task: Option<String> },
     /// Switch the task binding (worktree pointer inside a bound worktree, current file otherwise)
     Use { task: String },
@@ -87,7 +91,7 @@ enum Cmd {
     },
     /// Launch an agent on a task in its worktree, in the background (REIN_RUN_CMD)
     Run { task: Option<String> },
-    /// Show the transcript path of a task's most recent `rein run`
+    /// Show the session/log handle of a task's most recent `rein run`
     Logs { task: Option<String> },
     /// Check an item (LLM-safe mutation)
     Check {

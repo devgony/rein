@@ -60,7 +60,11 @@ impl TaskDoc {
                 "github_issue" => front.github_issue = val.parse().ok(),
                 "github_pr" => front.github_pr = val.parse().ok(),
                 "branch" => {
-                    front.branch = if val.is_empty() { None } else { Some(val.to_string()) }
+                    front.branch = if val.is_empty() {
+                        None
+                    } else {
+                        Some(val.to_string())
+                    }
                 }
                 "tags" => {
                     let inner = val.trim_start_matches('[').trim_end_matches(']');
@@ -416,7 +420,10 @@ fn rewrite_item_line(body: &str, item_id: &str, failed: bool) -> Result<String> 
             bail!("item '{}' is not failed (nothing to reopen)", item_id);
         }
         *line = match (failed, clean.is_empty()) {
-            (true, true) => format!("{}- [x] {} {} {}", indent, marker, FAILED_SENTINEL, FAIL_MARK),
+            (true, true) => format!(
+                "{}- [x] {} {} {}",
+                indent, marker, FAILED_SENTINEL, FAIL_MARK
+            ),
             (true, false) => format!(
                 "{}- [x] {} {} ~~{}~~ {}",
                 indent, marker, FAILED_SENTINEL, clean, FAIL_MARK
@@ -654,7 +661,13 @@ mod tests {
     use super::*;
 
     fn sample() -> TaskDoc {
-        let mut doc = TaskDoc::template("task-20260613-demo", "Demo", "inbox", "2026-06-13T10:00:00+09:00", false);
+        let mut doc = TaskDoc::template(
+            "task-20260613-demo",
+            "Demo",
+            "inbox",
+            "2026-06-13T10:00:00+09:00",
+            false,
+        );
         doc.body = doc.body.replace(
             "## Tasks\n",
             "## Tasks\n\n- [ ] <!-- task:one --> First thing\n- [ ] Second thing\n",
@@ -739,7 +752,7 @@ mod tests {
     #[test]
     fn edit_item_replaces_text_keeping_state_and_id() {
         let doc = sample(); // item "one" open: "First thing"
-        // edit an open item: text changes, box + id marker preserved
+                            // edit an open item: text changes, box + id marker preserved
         let body = edit_item(&doc.body, "one", "Reworded thing").unwrap();
         assert!(body.contains("- [ ] <!-- task:one --> Reworded thing"));
         let it = scan_items(&body)
@@ -824,7 +837,8 @@ mod tests {
 
     #[test]
     fn managed_replace_preserves_outside() {
-        let remote = "human intro\n\n<!-- rein:begin t1 -->\n\nold\n\n<!-- rein:end -->\n\nhuman outro";
+        let remote =
+            "human intro\n\n<!-- rein:begin t1 -->\n\nold\n\n<!-- rein:end -->\n\nhuman outro";
         let updated = replace_managed(remote, &wrap_managed("t1", "new content"));
         assert!(updated.contains("human intro"));
         assert!(updated.contains("human outro"));

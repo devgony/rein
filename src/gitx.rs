@@ -99,7 +99,9 @@ impl Repo {
         let mut lines = out.lines();
         let mut next = || -> Result<PathBuf> {
             Ok(PathBuf::from(
-                lines.next().ok_or_else(|| anyhow!("unexpected rev-parse output"))?,
+                lines
+                    .next()
+                    .ok_or_else(|| anyhow!("unexpected rev-parse output"))?,
             ))
         };
         Ok(Repo {
@@ -192,7 +194,12 @@ impl Repo {
     pub fn branch_exists(&self, branch: &str) -> bool {
         git_in(
             &self.workdir,
-            &["show-ref", "--verify", "--quiet", &format!("refs/heads/{}", branch)],
+            &[
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{}", branch),
+            ],
         )
         .is_ok()
     }

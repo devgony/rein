@@ -7,11 +7,12 @@ use crate::task;
 use crate::util;
 use crate::Ctx;
 use anyhow::{anyhow, bail, Context, Result};
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-/// Default agent command for `rein run`. `claude --bg` dispatches a tracked
+/// Default Claude command for `rein run`. `claude --bg` dispatches a tracked
 /// background session (visible in `claude agents`, attach with `claude attach
 /// <id>`) and returns immediately. Launched via `sh -c`, so it can read the
 /// `REIN_*` env vars rein exports; override with `REIN_RUN_CMD` or git `rein.run`.
@@ -20,14 +21,51 @@ use std::process::{Command, Stdio};
 /// to `rein:<branch>:<open task numbers>` (see `run`), so a glance at `claude
 /// agents` says which branch and which open items the session is working. A
 /// custom command can use `$REIN_TITLE` the same way (or set its own `--name`).
-const DEFAULT_RUN_CMD: &str =
+const DEFAULT_CLAUDE_RUN_CMD: &str =
     "claude --bg --dangerously-skip-permissions --name \"$REIN_TITLE\" /run-rein-task";
 
-/// Default LLM command for `rein summary`. `claude -p` runs Claude Code in
-/// non-interactive print mode: rein pipes the prompt (the task's items) on stdin
-/// and reads the completion from stdout. No tools are needed (pure text), so no
-/// skip-permissions. Override with `REIN_SUMMARY_CMD` or git `rein.summary`.
-const DEFAULT_SUMMARY_CMD: &str = "claude -p";
+/// Default Codex command. Codex's local CLI does not currently expose a `--bg`
+/// daemon mode like Claude Code, so rein backgrounds this foreground command
+/// itself and writes stdout/stderr to `<store>/runs/*.log`.
+const DEFAULT_CODEX_RUN_CMD: &str =
+    "codex exec --json --sandbox danger-full-access --add-dir \"$REIN_ROOT\" -- \"$REIN_PROMPT\"";
+
+/// Default opencode command. Like Codex, `opencode run` is foreground-only (no
+/// `--bg` daemon), so rein backgrounds it and writes stdout/stderr to
+/// `<store>/runs/*.log`. `--format json` emits newline-delimited events (each
+/// carrying a top-level `sessionID`) so rein can recover the session id for
+/// `rein logs`/attach; `--dangerously-skip-permissions` lets the detached run
+/// edit files and run `rein` without prompting. The prompt is passed as the
+/// message positional (rein already sets cwd to the task's worktree).
+const DEFAULT_OPENCODE_RUN_CMD: &str =
+    "opencode run --format json --dangerously-skip-permissions \"$REIN_PROMPT\"";
+
+/// Default LLM commands for `rein summary`. Summary follows the selected run
+/// agent (`REIN_RUN_AGENT` / git `rein.runAgent`) so a project configured for
+/// Codex does not accidentally summarize with Claude. All commands read the
+/// prompt from stdin and print the final message on stdout. opencode's `run`
+/// does not treat piped stdin as the prompt, so `"$(cat)"` slurps it into the
+/// message argument; its default (non-json) format prints just the reply text.
+const DEFAULT_CLAUDE_SUMMARY_CMD: &str = "claude -p";
+const DEFAULT_CODEX_SUMMARY_CMD: &str = "codex exec --sandbox read-only -- -";
+const DEFAULT_OPENCODE_SUMMARY_CMD: &str = "opencode run \"$(cat)\"";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunAgent {
+    Claude,
+    Codex,
+    Opencode,
+}
+
+impl RunAgent {
+    fn as_str(self) -> &'static str {
+        match self {
+            RunAgent::Claude => "claude",
+            RunAgent::Codex => "codex",
+            RunAgent::Opencode => "opencode",
+        }
+    }
+}
 
 /// inbox→active claim + optional worktree/branch/draft-PR.
 pub fn start(
@@ -41,7 +79,11 @@ pub fn start(
     match task.status {
         Status::Inbox => {}
         Status::Active => bail!("'{}' is already active", task.slug),
-        _ => bail!("'{}' is {} — only inbox tasks can be started", task.slug, task.status.as_str()),
+        _ => bail!(
+            "'{}' is {} — only inbox tasks can be started",
+            task.slug,
+            task.status.as_str()
+        ),
     }
     // atomic rename = claim; loser of a race errors here
     let new_path = ctx.store.move_task(&task, Status::Active)?;
@@ -57,7 +99,9 @@ pub fn start(
         .to_string_lossy()
         .to_string();
 
-    let branch_name = branch.map(|b| b.to_string()).unwrap_or_else(|| task.slug.clone());
+    let branch_name = branch
+        .map(|b| b.to_string())
+        .unwrap_or_else(|| task.slug.clone());
 
     if worktree {
         setup_worktree(ctx, &task, &branch_name, &mut st)?;
@@ -268,7 +312,11 @@ pub fn run(ctx: &Ctx, query: Option<&str>) -> Result<String> {
         None => resolve::resolve_task(ctx, None)?.0,
     };
     let mut st = state::load(&ctx.store, &task.id);
-    let worktree = st.worktree.as_deref().map(PathBuf::from).filter(|p| p.exists());
+    let worktree = st
+        .worktree
+        .as_deref()
+        .map(PathBuf::from)
+        .filter(|p| p.exists());
     let dir = worktree.clone().unwrap_or_else(|| ctx.repo.workdir.clone());
     let branch = st
         .branch
@@ -287,7 +335,11 @@ pub fn run(ctx: &Ctx, query: Option<&str>) -> Result<String> {
         .filter(|it| !it.checked && !it.failed)
         .filter_map(|it| it.id)
         .collect();
-    let label = if branch.is_empty() { task.slug.clone() } else { branch.clone() };
+    let label = if branch.is_empty() {
+        task.slug.clone()
+    } else {
+        branch.clone()
+    };
     let numbers = task::number_ranges(&open_ids);
     let title = if numbers.is_empty() {
         format!("rein:{}", label)
@@ -295,42 +347,24 @@ pub fn run(ctx: &Ctx, query: Option<&str>) -> Result<String> {
         format!("rein:{}:{}", label, numbers)
     };
 
-    let cmd = std::env::var("REIN_RUN_CMD")
+    let configured_cmd = std::env::var("REIN_RUN_CMD")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .or_else(|| ctx.repo.config_get("rein.run"))
-        .unwrap_or_else(|| DEFAULT_RUN_CMD.to_string());
+        .or_else(|| ctx.repo.config_get("rein.run"));
+    let agent = configured_run_agent(ctx, configured_cmd.as_deref())?;
+    let cmd = configured_cmd.unwrap_or_else(|| match agent {
+        RunAgent::Claude => DEFAULT_CLAUDE_RUN_CMD.to_string(),
+        RunAgent::Codex => DEFAULT_CODEX_RUN_CMD.to_string(),
+        RunAgent::Opencode => DEFAULT_OPENCODE_RUN_CMD.to_string(),
+    });
 
     // a fresh worktree only has the run-rein-task skill if it was committed; install
     // rein's bundled copy at the user level (~/.claude/skills) when absent so the
     // default `/run-rein-task` resolves in any worktree without touching the repo
-    if let Some(p) = crate::commands::local::ensure_user_skill().unwrap_or(None) {
-        println!("installed run-rein-task skill at {}", p.display());
-    }
-
-    // run the command and surface its output; `claude --bg` returns at once after
-    // dispatching the session and prints `backgrounded · <id> · <name>` + hints
-    let out = Command::new("sh")
-        .arg("-c")
-        .arg(&cmd)
-        .current_dir(&dir)
-        .env("REIN_TASK", &task.id)
-        .env("REIN_SLUG", &task.slug)
-        .env("REIN_BRANCH", &branch)
-        .env("REIN_DIR", &dir)
-        .env("REIN_TITLE", &title)
-        .output()
-        .context("failed to launch run command")?;
-    let reported = strip_ansi(&format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    ));
-
-    // capture the daemon-assigned session id so `rein logs` can point back at it
-    if let Some(id) = parse_session_id(&reported) {
-        st.run_session = Some(id);
-        state::save(&ctx.store, &task.id, &st)?;
+    if agent == RunAgent::Claude {
+        if let Some(p) = crate::commands::local::ensure_user_skill().unwrap_or(None) {
+            println!("installed run-rein-task skill at {}", p.display());
+        }
     }
 
     // return the summary (the caller decides how to show it — stdout or a TUI popup)
@@ -338,29 +372,598 @@ pub fn run(ctx: &Ctx, query: Option<&str>) -> Result<String> {
     if worktree.is_none() {
         msg.push_str("\nnote: no worktree — running in the main repo (edits are not isolated)");
     }
-    let reported = reported.trim_end();
-    if !reported.is_empty() {
-        msg.push('\n');
-        msg.push_str(reported);
+
+    match agent {
+        RunAgent::Claude => {
+            // run the command and surface its output; `claude --bg` returns at once after
+            // dispatching the session and prints `backgrounded · <id> · <name>` + hints
+            let out = run_shell_capture(
+                &ctx.store.root,
+                &cmd,
+                &dir,
+                &task.id,
+                &task.slug,
+                &branch,
+                &title,
+            )
+            .context("failed to launch run command")?;
+
+            // capture the daemon-assigned session id so `rein logs` can point back at it
+            if let Some(id) = parse_session_id(&out) {
+                st.run_session = Some(id);
+                st.run_agent = Some(agent.as_str().to_string());
+                st.run_log = None;
+                st.run_status = None;
+                state::save(&ctx.store, &task.id, &st)?;
+            }
+
+            let out = out.trim_end();
+            if !out.is_empty() {
+                msg.push('\n');
+                msg.push_str(out);
+            }
+        }
+        RunAgent::Codex | RunAgent::Opencode => {
+            let run = spawn_background(
+                &ctx.store, &task.id, &cmd, &dir, &task.id, &task.slug, &branch, &title, agent,
+            )
+            .with_context(|| format!("failed to launch {} run command", agent.as_str()))?;
+            st.run_session = Some(run.pid.to_string());
+            st.run_agent = Some(agent.as_str().to_string());
+            st.run_log = Some(run.log_path.to_string_lossy().to_string());
+            st.run_status = Some(run.status_path.to_string_lossy().to_string());
+            state::save(&ctx.store, &task.id, &st)?;
+
+            msg.push_str(&format!(
+                "\nbackgrounded {} pid {} ({})",
+                agent.as_str(),
+                run.pid,
+                run.log_path.display()
+            ));
+        }
     }
     Ok(msg)
 }
 
-/// Point at the background session of a task's most recent `rein run`, using
-/// Claude Code's own viewers (it tracks the session, transcript, and liveness).
+struct BackgroundRun {
+    pid: u32,
+    log_path: PathBuf,
+    status_path: PathBuf,
+}
+
+pub(crate) struct AttachCommand {
+    pub program: String,
+    pub args: Vec<String>,
+    pub dir: PathBuf,
+}
+
+/// Resolve the run backend: explicit `REIN_RUN_AGENT` env → git `rein.runAgent`
+/// → inferred from the program name of a custom `REIN_RUN_CMD`/`rein.run` →
+/// opencode as the default when nothing is configured.
+fn configured_run_agent(ctx: &Ctx, cmd: Option<&str>) -> Result<RunAgent> {
+    let explicit = std::env::var("REIN_RUN_AGENT")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| ctx.repo.config_get("rein.runAgent"));
+    if let Some(agent) = explicit {
+        return parse_run_agent(&agent);
+    }
+    Ok(cmd.and_then(infer_agent_from_command).unwrap_or(RunAgent::Opencode))
+}
+
+/// The backend `configured_run_agent` falls back to when nothing is configured,
+/// as a name. The single source of truth for the default, so the TUI can show
+/// which agent `rein run` would use even when the project hasn't picked one.
+pub(crate) fn default_run_agent() -> &'static str {
+    RunAgent::Opencode.as_str()
+}
+
+fn parse_run_agent(s: &str) -> Result<RunAgent> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "claude" => Ok(RunAgent::Claude),
+        "codex" => Ok(RunAgent::Codex),
+        "opencode" => Ok(RunAgent::Opencode),
+        other => {
+            bail!("unknown run agent '{other}' — expected 'claude', 'codex', or 'opencode'")
+        }
+    }
+}
+
+/// Infer the backend from a custom `REIN_RUN_CMD`/`rein.run` by its program
+/// name (the first word, with any path prefix or quotes stripped). `None` when
+/// the program is unrecognized, leaving the caller to apply the default — so a
+/// custom `claude …` command still selects Claude rather than falling through.
+fn infer_agent_from_command(cmd: &str) -> Option<RunAgent> {
+    let first = cmd
+        .trim_start()
+        .split(|c: char| c.is_whitespace())
+        .next()
+        .unwrap_or_default()
+        .trim_matches(|c| c == '\'' || c == '"');
+    match first.rsplit('/').next() {
+        Some("claude") => Some(RunAgent::Claude),
+        Some("codex") => Some(RunAgent::Codex),
+        Some("opencode") => Some(RunAgent::Opencode),
+        _ => None,
+    }
+}
+
+fn run_shell_capture(
+    store_root: &std::path::Path,
+    cmd: &str,
+    dir: &std::path::Path,
+    task_id: &str,
+    slug: &str,
+    branch: &str,
+    title: &str,
+) -> Result<String> {
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .current_dir(dir)
+        .env("REIN_TASK", task_id)
+        .env("REIN_SLUG", slug)
+        .env("REIN_BRANCH", branch)
+        .env("REIN_DIR", dir)
+        .env("REIN_ROOT", store_root)
+        .env("REIN_TITLE", title)
+        .env("REIN_PROMPT", crate::commands::local::run_task_prompt())
+        .output()?;
+    Ok(strip_ansi(&format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )))
+}
+
+/// Codex-only post-run probe (spliced into the EXIT trap): scan the JSON event
+/// log for a turn that started but never completed and mark it `interrupted`/
+/// `failed` before the shared `rein todo` check. opencode emits a different
+/// event schema, so it omits this entirely rather than scanning the log in vain.
+const CODEX_TURN_CHECK: &str = "__rein_last_event=$(awk '\n\
+     /^\\{\"type\":\"turn.started\"/ { last=\"turn.started\" }\n\
+     /^\\{\"type\":\"item.started\"/ { last=\"item.started\" }\n\
+     /^\\{\"type\":\"item.completed\"/ {\n\
+       if ($0 ~ /\"type\":\"command_execution\"/) last=\"command.completed\"\n\
+       else if ($0 ~ /\"type\":\"agent_message\"/) last=\"agent.completed\"\n\
+       else last=\"item.completed\"\n\
+     }\n\
+     /^\\{\"type\":\"item.failed\"/ { last=\"item.failed\" }\n\
+     /^\\{\"type\":\"error\"/ { last=\"error\" }\n\
+     END { print last }\n\
+     ' \"$__rein_log\" 2>/dev/null)\n\
+     case \"$__rein_last_event\" in\n\
+     turn.started|item.started|command.completed)\n\
+     printf 'rein post-run: codex turn interrupted before completion (last event: %s)\\n' \"$__rein_last_event\" >&2\n\
+     printf 'interrupted\\n' > \"$__rein_status\"\n\
+     return\n\
+     ;;\n\
+     error)\n\
+     printf 'rein post-run: codex emitted an error event\\n' >&2\n\
+     printf 'failed\\n' > \"$__rein_status\"\n\
+     return\n\
+     ;;\n\
+     esac\n";
+
+/// Background a foreground run agent (Codex or opencode) that has no daemon mode
+/// of its own: wrap it in a shell that captures stdout/stderr to
+/// `<store>/runs/*.log` and records an exit status to a sibling `.status` file
+/// via an EXIT trap, then spawn it detached. Codex runs splice in
+/// `CODEX_TURN_CHECK` to flag an interrupted turn; opencode skips it and relies
+/// on the shared exit-code + `rein todo` completeness check.
+#[allow(clippy::too_many_arguments)]
+fn spawn_background(
+    store: &Store,
+    task_id: &str,
+    cmd: &str,
+    dir: &std::path::Path,
+    env_task: &str,
+    slug: &str,
+    branch: &str,
+    title: &str,
+    agent: RunAgent,
+) -> Result<BackgroundRun> {
+    let runs_dir = store.root.join("runs");
+    std::fs::create_dir_all(&runs_dir)?;
+    let stamp = chrono::Local::now().format("%Y%m%d%H%M%S%9f").to_string();
+    let base = format!("{}-{}", util::slugify(task_id), stamp);
+    let log_path = runs_dir.join(format!("{base}.log"));
+    let status_path = runs_dir.join(format!("{base}.status"));
+
+    {
+        let mut log = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&log_path)?;
+        writeln!(log, "rein run: {task_id}")?;
+        writeln!(log, "cwd: {}", dir.display())?;
+        writeln!(log)?;
+    }
+
+    let status_target = shell_quote(&status_path.to_string_lossy());
+    let log_target = shell_quote(&log_path.to_string_lossy());
+    let event_check = if matches!(agent, RunAgent::Codex) {
+        CODEX_TURN_CHECK
+    } else {
+        ""
+    };
+    let wrapped = format!(
+        "__rein_status={status_target}\n\
+         __rein_log={log_target}\n\
+         __rein_bin=${{REIN_BIN:-rein}}\n\
+         __rein_write_status() {{\n\
+         __rein_code=$?\n\
+         if [ \"$__rein_code\" -eq 0 ]; then\n\
+         {event_check}\
+         __rein_todo=$(\"$__rein_bin\" todo --task \"$REIN_TASK\" 2>&1)\n\
+         __rein_todo_code=$?\n\
+         if [ \"$__rein_todo_code\" -ne 0 ]; then\n\
+         printf 'rein post-run todo check failed:\\n%s\\n' \"$__rein_todo\" >&2\n\
+         printf '%s\\n' \"$__rein_todo_code\" > \"$__rein_status\"\n\
+         return\n\
+         fi\n\
+         if [ -n \"$__rein_todo\" ]; then\n\
+         printf 'rein post-run: unchecked items remain:\\n%s\\n' \"$__rein_todo\" >&2\n\
+         printf 'incomplete\\n' > \"$__rein_status\"\n\
+         return\n\
+         fi\n\
+         fi\n\
+         printf '%s\\n' \"$__rein_code\" > \"$__rein_status\"\n\
+         }}\n\
+         trap __rein_write_status EXIT\n\
+         {cmd}\n"
+    );
+    let stdout = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+    let stderr = stdout.try_clone()?;
+    let child = Command::new("sh")
+        .arg("-c")
+        .arg(wrapped)
+        .current_dir(dir)
+        .env("REIN_TASK", env_task)
+        .env("REIN_SLUG", slug)
+        .env("REIN_BRANCH", branch)
+        .env("REIN_DIR", dir)
+        .env("REIN_ROOT", &store.root)
+        .env(
+            "REIN_BIN",
+            std::env::current_exe().unwrap_or_else(|_| PathBuf::from("rein")),
+        )
+        .env("REIN_TITLE", title)
+        .env("REIN_PROMPT", crate::commands::local::run_task_prompt())
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()?;
+
+    Ok(BackgroundRun {
+        pid: child.id(),
+        log_path,
+        status_path,
+    })
+}
+
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+pub(crate) fn bg_status_from_state(st: &state::TaskState) -> Option<String> {
+    if let Some(path) = st.run_status.as_deref() {
+        if let Ok(code) = std::fs::read_to_string(path) {
+            let code = code.trim();
+            if !code.is_empty() {
+                return Some(
+                    match code {
+                        "0" => "succeeded",
+                        "incomplete" => "incomplete",
+                        "interrupted" => "interrupted",
+                        _ => "failed",
+                    }
+                    .to_string(),
+                );
+            }
+        }
+    }
+    let pid = st.run_session.as_deref()?;
+    if process_alive(pid) {
+        Some("working".to_string())
+    } else {
+        Some("stopped".to_string())
+    }
+}
+
+fn bg_status_file_missing(st: &state::TaskState) -> bool {
+    st.run_status
+        .as_deref()
+        .map(|path| !std::path::Path::new(path).exists())
+        .unwrap_or(false)
+        && st
+            .run_session
+            .as_deref()
+            .map(|pid| !process_alive(pid))
+            .unwrap_or(false)
+}
+
+fn bg_status_path(st: &state::TaskState) -> Option<&str> {
+    st.run_status.as_deref()
+}
+
+fn bg_log_path(st: &state::TaskState) -> Option<&str> {
+    st.run_log.as_deref()
+}
+
+fn codex_thread_resume_hint(thread_id: &str) -> String {
+    format!("codex resume --include-non-interactive {thread_id}")
+}
+
+fn codex_exec_resume_hint(thread_id: &str) -> String {
+    format!("codex exec resume {thread_id} \"<prompt>\"")
+}
+
+fn codex_latest_resume_hint() -> &'static str {
+    "codex resume --include-non-interactive --last"
+}
+
+fn codex_latest_exec_resume_hint() -> &'static str {
+    "codex exec resume --last \"<prompt>\""
+}
+
+fn print_codex_resume_hints(log: &str) {
+    if let Some(thread_id) = codex_thread_id_from_log(log) {
+        println!(
+            "  {}   # open interactive UI for this session",
+            codex_thread_resume_hint(&thread_id)
+        );
+        println!(
+            "  {}   # continue non-interactively with a new prompt",
+            codex_exec_resume_hint(&thread_id)
+        );
+    } else {
+        println!(
+            "  {}   # open latest saved Codex session, if available",
+            codex_latest_resume_hint()
+        );
+        println!(
+            "  {}   # continue latest session non-interactively with a new prompt",
+            codex_latest_exec_resume_hint()
+        );
+    }
+}
+
+fn opencode_session_resume_hint(session_id: &str) -> String {
+    format!("opencode --session {session_id}")
+}
+
+fn opencode_run_resume_hint(session_id: &str) -> String {
+    format!("opencode run --session {session_id} \"<prompt>\"")
+}
+
+fn opencode_latest_resume_hint() -> &'static str {
+    "opencode --continue"
+}
+
+fn opencode_latest_run_resume_hint() -> &'static str {
+    "opencode run --continue \"<prompt>\""
+}
+
+fn print_opencode_resume_hints(log: &str) {
+    if let Some(session_id) = opencode_session_id_from_log(log) {
+        println!(
+            "  {}   # open interactive UI for this session",
+            opencode_session_resume_hint(&session_id)
+        );
+        println!(
+            "  {}   # continue non-interactively with a new prompt",
+            opencode_run_resume_hint(&session_id)
+        );
+    } else {
+        println!(
+            "  {}   # open latest opencode session, if available",
+            opencode_latest_resume_hint()
+        );
+        println!(
+            "  {}   # continue latest session non-interactively with a new prompt",
+            opencode_latest_run_resume_hint()
+        );
+    }
+}
+
+pub(crate) fn attach_command(ctx: &Ctx, query: Option<&str>) -> Result<AttachCommand> {
+    let task = match query {
+        Some(q) => ctx.store.find(q)?,
+        None => resolve::resolve_task(ctx, None)?.0,
+    };
+    let st = state::load(&ctx.store, &task.id);
+    let session = st
+        .run_session
+        .clone()
+        .with_context(|| format!("no run recorded for '{}' — run `rein run` first", task.slug))?;
+    let worktree = st
+        .worktree
+        .as_deref()
+        .map(PathBuf::from)
+        .filter(|p| p.exists());
+    let dir = worktree.unwrap_or_else(|| ctx.repo.workdir.clone());
+    match st.run_agent.as_deref().unwrap_or("claude") {
+        "codex" => {
+            let log = st
+                .run_log
+                .as_deref()
+                .with_context(|| format!("no Codex log recorded for '{}'", task.slug))?;
+            let thread_id = codex_thread_id_from_log(log).with_context(|| {
+                format!(
+                    "no Codex thread id found in {} — wait for the run to start, \
+                     or use the default `codex exec --json ...` command",
+                    log
+                )
+            })?;
+            Ok(AttachCommand {
+                program: std::env::var("REIN_CODEX").unwrap_or_else(|_| "codex".to_string()),
+                args: vec![
+                    "resume".to_string(),
+                    "--include-non-interactive".to_string(),
+                    thread_id,
+                ],
+                dir,
+            })
+        }
+        "opencode" => {
+            let log = st
+                .run_log
+                .as_deref()
+                .with_context(|| format!("no opencode log recorded for '{}'", task.slug))?;
+            let session_id = opencode_session_id_from_log(log).with_context(|| {
+                format!(
+                    "no opencode session id found in {} — wait for the run to start, \
+                     or use the default `opencode run --format json ...` command",
+                    log
+                )
+            })?;
+            Ok(AttachCommand {
+                program: std::env::var("REIN_OPENCODE").unwrap_or_else(|_| "opencode".to_string()),
+                args: vec!["--session".to_string(), session_id],
+                dir,
+            })
+        }
+        _ => Ok(AttachCommand {
+            program: std::env::var("REIN_CLAUDE").unwrap_or_else(|_| "claude".to_string()),
+            args: vec!["attach".to_string(), session],
+            dir,
+        }),
+    }
+}
+
+/// Whether `pid` is still a live process. The dashboard probes this per active
+/// codex/opencode run on every reload, so it uses `kill(pid, 0)` directly —
+/// signal 0 only error-checks (ESRCH = gone), it sends nothing — instead of
+/// forking a `kill` process each time. `EPERM` means the process exists but is
+/// owned by another user, which still counts as alive.
+fn process_alive(pid: &str) -> bool {
+    let Ok(pid) = pid.parse::<i32>() else {
+        return false;
+    };
+    if pid <= 0 {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        // SAFETY: `kill` is a plain libc call with no memory effects; signal 0
+        // performs permission/existence checks without delivering a signal.
+        let rc = unsafe { libc::kill(pid, 0) };
+        rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(not(unix))]
+    {
+        Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+}
+
+/// Point at a task's most recent `rein run`, using the backend's native viewer
+/// when it has one, or rein's own log file for direct background processes.
 pub fn logs(ctx: &Ctx, query: Option<&str>) -> Result<()> {
     let task = match query {
         Some(q) => ctx.store.find(q)?,
         None => resolve::resolve_task(ctx, None)?.0,
     };
-    let session = state::load(&ctx.store, &task.id)
+    let st = state::load(&ctx.store, &task.id);
+    let session = st
         .run_session
+        .clone()
         .with_context(|| format!("no run recorded for '{}' — run `rein run` first", task.slug))?;
-    println!("session {}", session);
-    println!("  claude attach {}   # watch live / resume", session);
-    println!("  claude logs {}     # recent output", session);
-    println!("  claude agents        # all background sessions");
+    match st.run_agent.as_deref().unwrap_or("claude") {
+        "codex" => {
+            println!("codex pid {}", session);
+            if let Some(state) = bg_status_from_state(&st) {
+                println!("state {}", state);
+                if state == "incomplete" {
+                    println!("warning unchecked task items remain; run `rein todo` for the task");
+                } else if state == "interrupted" {
+                    println!(
+                        "warning codex turn interrupted before completion; inspect the log or resume it"
+                    );
+                }
+            }
+            if let Some(status) = bg_status_path(&st) {
+                println!("status {}", status);
+                if bg_status_file_missing(&st) {
+                    println!("warning status file missing; the run likely stopped before rein recorded its exit code");
+                }
+            }
+            if let Some(log) = bg_log_path(&st) {
+                println!("log {}", log);
+                println!("  tail -f {}   # watch output", shell_quote(log));
+                print_codex_resume_hints(log);
+            }
+        }
+        "opencode" => {
+            println!("opencode pid {}", session);
+            if let Some(state) = bg_status_from_state(&st) {
+                println!("state {}", state);
+                if state == "incomplete" {
+                    println!("warning unchecked task items remain; run `rein todo` for the task");
+                }
+            }
+            if let Some(status) = bg_status_path(&st) {
+                println!("status {}", status);
+                if bg_status_file_missing(&st) {
+                    println!("warning status file missing; the run likely stopped before rein recorded its exit code");
+                }
+            }
+            if let Some(log) = bg_log_path(&st) {
+                println!("log {}", log);
+                println!("  tail -f {}   # watch output", shell_quote(log));
+                print_opencode_resume_hints(log);
+            }
+        }
+        _ => {
+            println!("session {}", session);
+            println!("  claude attach {}   # watch live / resume", session);
+            println!("  claude logs {}     # recent output", session);
+            println!("  claude agents        # all background sessions");
+        }
+    }
     Ok(())
+}
+
+pub(crate) fn codex_thread_id_from_log(path: &str) -> Option<String> {
+    let log = std::fs::read_to_string(path).ok()?;
+    for line in log.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(|x| x.as_str()) == Some("thread.started") {
+            if let Some(id) = v.get("thread_id").and_then(|x| x.as_str()) {
+                return Some(id.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Recover the opencode session id from a `--format json` run log. Every event
+/// line carries a top-level `sessionID`, so the first parseable line yields it.
+pub(crate) fn opencode_session_id_from_log(path: &str) -> Option<String> {
+    let log = std::fs::read_to_string(path).ok()?;
+    for line in log.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if let Some(id) = v.get("sessionID").and_then(|x| x.as_str()) {
+            return Some(id.to_string());
+        }
+    }
+    None
 }
 
 /// Pull the short session id out of `claude --bg`'s `backgrounded · <id> · …`
@@ -420,7 +1023,12 @@ fn item_error_hint(ctx: &Ctx, task: &TaskRef, item_id: &str, base: anyhow::Error
     if avail.is_empty() {
         anyhow!("{} — '{}' has no checklist items", base, task.slug)
     } else {
-        anyhow!("{}. available items in {}: {}", base, task.slug, avail.join(", "))
+        anyhow!(
+            "{}. available items in {}: {}",
+            base,
+            task.slug,
+            avail.join(", ")
+        )
     }
 }
 
@@ -573,18 +1181,21 @@ fn summary_prompt(items: &[task::Item]) -> String {
     p
 }
 
-/// Run the configured summary command (`REIN_SUMMARY_CMD` → git `rein.summary` →
-/// default `claude -p`), piping `prompt` on stdin and returning its stdout.
+/// Run the summary command mapped from the configured run agent
+/// (`REIN_RUN_AGENT` → git `rein.runAgent` → opencode), piping `prompt` on stdin
+/// and returning stdout.
 fn run_summary_llm(ctx: &Ctx, prompt: &str) -> Result<String> {
-    let cmd = std::env::var("REIN_SUMMARY_CMD")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| ctx.repo.config_get("rein.summary"))
-        .unwrap_or_else(|| DEFAULT_SUMMARY_CMD.to_string());
+    let agent = configured_run_agent(ctx, None)?;
+    let cmd = match agent {
+        RunAgent::Claude => DEFAULT_CLAUDE_SUMMARY_CMD,
+        RunAgent::Codex => DEFAULT_CODEX_SUMMARY_CMD,
+        RunAgent::Opencode => DEFAULT_OPENCODE_SUMMARY_CMD,
+    };
     let mut child = Command::new("sh")
         .arg("-c")
-        .arg(&cmd)
+        .arg(cmd)
         .current_dir(&ctx.repo.workdir)
+        .env("REIN_ROOT", &ctx.store.root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -670,7 +1281,10 @@ pub fn retry(ctx: &Ctx, item_id: &str, flag: Option<&str>) -> Result<()> {
         Ok(body) => body,
         Err(e) => return Err(item_error_hint(ctx, &task, item_id, e)),
     };
-    doc.body = task::append_log(&doc.body, &format!("{} Task{}: RETRY", util::now_iso(), item_id));
+    doc.body = task::append_log(
+        &doc.body,
+        &format!("{} Task{}: RETRY", util::now_iso(), item_id),
+    );
     doc.touch();
     ctx.store.write_doc(&task.path, &doc)?;
     println!("reopened {} in {}", item_id, task.slug);
@@ -707,7 +1321,12 @@ pub fn move_to(ctx: &Ctx, query: &str, status: &str) -> Result<()> {
         bail!("'{}' is already {}", task.slug, to.as_str());
     }
     relocate(&ctx.store, &task, to)?;
-    println!("moved {} {} → {}", task.slug, task.status.as_str(), to.as_str());
+    println!(
+        "moved {} {} → {}",
+        task.slug,
+        task.status.as_str(),
+        to.as_str()
+    );
     Ok(())
 }
 
@@ -898,7 +1517,10 @@ pub fn delete(ctx: &Ctx, query: &str, force: bool) -> Result<()> {
     state::remove(&ctx.store, &task.id)?;
     // drop any conflict backups keyed by this task's slug (best-effort)
     for suffix in [".local.md", ".remote.md"] {
-        let backup = ctx.store.conflicts_dir().join(format!("{}{}", task.slug, suffix));
+        let backup = ctx
+            .store
+            .conflicts_dir()
+            .join(format!("{}{}", task.slug, suffix));
         if backup.exists() {
             let _ = std::fs::remove_file(&backup);
         }
