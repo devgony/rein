@@ -437,6 +437,9 @@ pub(crate) struct AttachCommand {
     pub dir: PathBuf,
 }
 
+/// Resolve the run backend: explicit `REIN_RUN_AGENT` env → git `rein.runAgent`
+/// → inferred from the program name of a custom `REIN_RUN_CMD`/`rein.run` →
+/// opencode as the default when nothing is configured.
 fn configured_run_agent(ctx: &Ctx, cmd: Option<&str>) -> Result<RunAgent> {
     let explicit = std::env::var("REIN_RUN_AGENT")
         .ok()
@@ -445,7 +448,7 @@ fn configured_run_agent(ctx: &Ctx, cmd: Option<&str>) -> Result<RunAgent> {
     if let Some(agent) = explicit {
         return parse_run_agent(&agent);
     }
-    Ok(cmd.and_then(infer_agent_from_command).unwrap_or(RunAgent::Claude))
+    Ok(cmd.and_then(infer_agent_from_command).unwrap_or(RunAgent::Opencode))
 }
 
 fn parse_run_agent(s: &str) -> Result<RunAgent> {
@@ -460,8 +463,9 @@ fn parse_run_agent(s: &str) -> Result<RunAgent> {
 }
 
 /// Infer the backend from a custom `REIN_RUN_CMD`/`rein.run` by its program
-/// name (the first word, with any path prefix or quotes stripped): `codex` or
-/// `opencode` select that backend; anything else falls back to Claude.
+/// name (the first word, with any path prefix or quotes stripped). `None` when
+/// the program is unrecognized, leaving the caller to apply the default — so a
+/// custom `claude …` command still selects Claude rather than falling through.
 fn infer_agent_from_command(cmd: &str) -> Option<RunAgent> {
     let first = cmd
         .trim_start()
@@ -470,6 +474,7 @@ fn infer_agent_from_command(cmd: &str) -> Option<RunAgent> {
         .unwrap_or_default()
         .trim_matches(|c| c == '\'' || c == '"');
     match first.rsplit('/').next() {
+        Some("claude") => Some(RunAgent::Claude),
         Some("codex") => Some(RunAgent::Codex),
         Some("opencode") => Some(RunAgent::Opencode),
         _ => None,
@@ -1140,7 +1145,7 @@ fn summary_prompt(items: &[task::Item]) -> String {
 }
 
 /// Run the summary command mapped from the configured run agent
-/// (`REIN_RUN_AGENT` → git `rein.runAgent` → Claude), piping `prompt` on stdin
+/// (`REIN_RUN_AGENT` → git `rein.runAgent` → opencode), piping `prompt` on stdin
 /// and returning stdout.
 fn run_summary_llm(ctx: &Ctx, prompt: &str) -> Result<String> {
     let agent = configured_run_agent(ctx, None)?;

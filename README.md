@@ -71,7 +71,7 @@ rein open settings-cleanup    # write Goal/Tasks/Validation in $EDITOR
 rein start settings-cleanup   # inbox → active, sets current to this task
 ```
 
-`rein title <text>` / `rein goal <text>` set the frontmatter title and the `## Goal` section through rein (LLM-safe — rein owns the write, no direct Markdown edits). Listed the items but the title/Goal are still a placeholder? `rein summary [task]` has the configured run agent summarize the items into a concise title + Goal and applies both through that same safe path — the LLM only returns text. The summary backend follows `REIN_RUN_AGENT` → git config `rein.runAgent` → `claude`; Claude uses `claude -p`, Codex uses `codex exec --sandbox read-only -- -`, and opencode uses `opencode run "$(cat)"`. The prompt (the item list) is piped on stdin, and the reply must be `TITLE: …` / `GOAL: …`.
+`rein title <text>` / `rein goal <text>` set the frontmatter title and the `## Goal` section through rein (LLM-safe — rein owns the write, no direct Markdown edits). Listed the items but the title/Goal are still a placeholder? `rein summary [task]` has the configured run agent summarize the items into a concise title + Goal and applies both through that same safe path — the LLM only returns text. The summary backend follows `REIN_RUN_AGENT` → git config `rein.runAgent` → `opencode` (the default); Claude uses `claude -p`, Codex uses `codex exec --sandbox read-only -- -`, and opencode uses `opencode run "$(cat)"`. The prompt (the item list) is piped on stdin, and the reply must be `TITLE: …` / `GOAL: …`.
 
 Then hand it to Claude Code; following the skill rules, the LLM proceeds:
 
@@ -253,7 +253,7 @@ The skill gets remaining items via `rein todo` and changes state only through `r
 
 You don't have to `cd` into a worktree to work a task — rein already knows where each task lives. `rein run [task]` (TUI: `x`) launches an agent **in the background**, with its cwd set to the task's worktree (or the main repo if the task only has a branch) and `REIN_TASK`/`REIN_SLUG`/`REIN_BRANCH`/`REIN_DIR`/`REIN_TITLE`/`REIN_PROMPT` exported, so the agent resolves the task no matter where it was invoked. Claude Code backgrounds itself with `claude --bg`; Codex's local `codex exec` and `opencode run` are foreground-only, so rein backgrounds them and writes stdout/stderr under `<store>/runs/`.
 
-The agent backend is resolved from `REIN_RUN_AGENT` → git config `rein.runAgent` → inferred from a configured `REIN_RUN_CMD` whose first word is `codex`/`opencode` → `claude`. The command template is resolved from `REIN_RUN_CMD` env → git config `rein.run` → the backend default.
+The agent backend is resolved from `REIN_RUN_AGENT` → git config `rein.runAgent` → inferred from a configured `REIN_RUN_CMD` whose first word is `codex`/`opencode`/`claude` → `opencode` (the default when nothing is configured). The command template is resolved from `REIN_RUN_CMD` env → git config `rein.run` → the backend default.
 
 Claude default:
 

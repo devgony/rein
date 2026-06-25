@@ -1028,7 +1028,7 @@ impl App {
             },
             KeyCode::Char('A') => match self.agent_target_project() {
                 Some(project) => {
-                    let current = self.project_run_agent(&project).unwrap_or("claude");
+                    let current = self.project_run_agent(&project).unwrap_or("opencode");
                     self.agent_sel = RUN_AGENT_CHOICES
                         .iter()
                         .position(|agent| agent.as_str() == current)

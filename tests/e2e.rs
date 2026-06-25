@@ -70,7 +70,9 @@ fn rein(env: &Env, cwd: &Path) -> Command {
         .env("EDITOR", "true")
         .env_remove("REIN_TASK")
         .env_remove("REIN_ROOT")
-        .env_remove("REIN_GH");
+        .env_remove("REIN_GH")
+        .env_remove("REIN_RUN_AGENT")
+        .env_remove("REIN_RUN_CMD");
     c
 }
 
@@ -1867,6 +1869,7 @@ fn run_installs_skill_at_user_level_without_touching_repo() {
         "precondition: no user-level skill yet"
     );
     rein(&env, &env.repo)
+        .env("REIN_RUN_AGENT", "claude")
         .env("REIN_RUN_CMD", "true")
         .args(["run", "job"])
         .assert()
@@ -1897,6 +1900,7 @@ fn run_captures_bg_session_id_for_logs() {
         .success();
     // fake agent prints what `claude --bg` prints; rein parses the session id out
     rein(&env, &env.repo)
+        .env("REIN_RUN_AGENT", "claude")
         .env("REIN_RUN_CMD", "printf 'backgrounded abcd1234 rein:job\\n'")
         .args(["run", "job"])
         .assert()
@@ -2246,6 +2250,49 @@ fn run_infers_opencode_backend_from_run_cmd() {
 
 #[cfg(unix)]
 #[test]
+fn run_infers_claude_backend_from_run_cmd() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo)
+        .args(["new", "job"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "job", "--worktree"])
+        .assert()
+        .success();
+    let fake = env.bin_dir.join("claude");
+    fs::write(&fake, "#!/bin/sh\nprintf 'backgrounded abcd1234 rein:job\\n'\n").unwrap();
+    make_executable(&fake);
+    let path = format!(
+        "{}:{}",
+        env.bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    rein(&env, &env.repo)
+        .env("PATH", path)
+        .env("REIN_RUN_CMD", "claude")
+        .args(["run", "job"])
+        .assert()
+        .success();
+
+    let id = task_id(&env, "active", "job");
+    let state = read(&store_root(&env).join("state").join(format!("{}.json", id)));
+    assert!(
+        state.contains(r#""run_agent": "claude""#),
+        "a claude run command must keep selecting claude despite the opencode default: {}",
+        state
+    );
+    assert!(
+        state.contains("abcd1234"),
+        "claude session id not recorded: {}",
+        state
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn run_default_opencode_command_passes_prompt_as_message() {
     let env = setup();
     init(&env);
@@ -2290,6 +2337,33 @@ fn run_default_opencode_command_passes_prompt_as_message() {
         args.contains("<Use the run-rein-task skill"),
         "default opencode prompt must be the executable run prompt passed as the message: {}",
         args
+    );
+}
+
+#[test]
+fn run_defaults_to_opencode_when_unconfigured() {
+    let env = setup();
+    init(&env);
+    rein(&env, &env.repo)
+        .args(["new", "job"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .args(["start", "job", "--worktree"])
+        .assert()
+        .success();
+    rein(&env, &env.repo)
+        .env("REIN_RUN_CMD", "true")
+        .args(["run", "job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("backgrounded opencode pid"));
+    let id = task_id(&env, "active", "job");
+    let state = read(&store_root(&env).join("state").join(format!("{}.json", id)));
+    assert!(
+        state.contains(r#""run_agent": "opencode""#),
+        "no run agent configured should default to opencode: {}",
+        state
     );
 }
 
@@ -2766,6 +2840,7 @@ fn summary_generates_title_and_goal_from_items_via_llm() {
     let args_log = env.bin_dir.join("summary_args.txt");
     rein(&env, &env.repo)
         .env("PATH", path)
+        .env("REIN_RUN_AGENT", "claude")
         .env("SUMMARY_PROMPT_LOG", &prompt_log)
         .env("SUMMARY_ARGS_LOG", &args_log)
         .args(["summary", "feat-v3"])
